@@ -1,0 +1,7 @@
+# Godot's import cache (rebuilt when the project is opened)
+client/.godot/
+# exported builds: they go to GitHub "Releases", not into the code
+Release/
+client/*.exe
+client/*.pck
+*.zip

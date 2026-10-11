@@ -1,0 +1,45 @@
+[gd_scene format=3 uid="uid://byfvmpflcs1tn"]
+
+[ext_resource type="Script" uid="uid://doto2s3jy6qgg" path="res://jokers/augmented_joker.gd" id="1_2gyqf"]
+[ext_resource type="PackedScene" uid="uid://ru3dokgpc2k5" path="res://jokers/ComfyUI_00002.glb" id="2_53qtf"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_53qtf"]
+albedo_color = Color(0.85, 0.2, 0.2, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ivgs6"]
+size = Vector3(0.06, 0.025, 0.025)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_qha0s"]
+albedo_color = Color(0.95, 0.95, 0.92, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_od1r5"]
+size = Vector3(0.062, 0.006, 0.027)
+
+[node name="j_runner" type="Node3D" unique_id=827206056]
+script = ExtResource("1_2gyqf")
+label_node = NodePath("Value")
+label_source = "extra[\"chips\"]"
+label_format = "+%d Chips"
+
+[node name="Shoe" type="MeshInstance3D" parent="." unique_id=760745983]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0125, 0)
+visible = false
+material_override = SubResource("StandardMaterial3D_53qtf")
+mesh = SubResource("BoxMesh_ivgs6")
+
+[node name="Sole" type="MeshInstance3D" parent="." unique_id=1702963652]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.003, 0)
+visible = false
+material_override = SubResource("StandardMaterial3D_qha0s")
+mesh = SubResource("BoxMesh_od1r5")
+
+[node name="Value" type="Label3D" parent="." unique_id=1428666480]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.06, 0)
+visible = false
+pixel_size = 0.0005
+billboard = 1
+font_size = 36
+outline_size = 8
+
+[node name="ComfyUI_00002" parent="." unique_id=708121734 instance=ExtResource("2_53qtf")]
+transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, 0, 0.037743203, 0)

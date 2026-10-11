@@ -1,0 +1,4 @@
+# Godot erzeugt diese Ordner selbst – nicht ins Git-Repo aufnehmen
+.godot/
+*.import
+export_presets.cfg
