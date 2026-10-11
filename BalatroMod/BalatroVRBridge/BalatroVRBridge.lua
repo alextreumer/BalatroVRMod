@@ -1,8 +1,8 @@
 --- STEAMODDED HEADER
 --- MOD_NAME: Balatro in VR
 --- MOD_ID: BalatroVRBridge
---- MOD_AUTHOR: [BalatroVR]
---- MOD_DESCRIPTION: Mirrors Balatro's complete UI and cards to a VR client over localhost TCP and executes clicks, hovers and gestures sent back from VR.
+--- MOD_AUTHOR: [UnderTheVRadar]
+--- MOD_DESCRIPTION: Play Balatro in VR: the whole game around you in a virtual casino, with your cards in your hand and 3D jokers on the table. Needs the "Balatro in VR" client - youtube.com/@UnderTheVRadar
 
 ----------------------------------------------
 ------------MOD CODE -------------------------
@@ -1004,9 +1004,11 @@ local function input_blocked()
     return ((c.locked and not (G.SETTINGS and G.SETTINGS.paused)) or (c.locks and c.locks.frame)) and true or false
 end
 
-local function click_ui_button(id)
-    local btn = G.buttons and G.buttons:get_UIE_by_ID(id)
-    if btn and btn.config and btn.config.button then
+-- box: the UIBox the button lives in (default: the hand's Play / Discard buttons)
+local function click_ui_button(id, box)
+    box = box or G.buttons
+    local btn = box and box:get_UIE_by_ID(id)
+    if btn and btn.config and btn.config.button and not btn.disable_button then
         btn:click()
         return true
     end
@@ -1556,6 +1558,28 @@ HANDLERS.sell = { gated = true, fn = function(m)
     if not is_a(card, Card) or not card:can_sell_card() then return false end
     G.FUNCS.sell_card({ config = { ref_table = card } })
     return true
+end }
+
+-- Buying from the VR shop counter (an item taken off the counter): jokers, consumables and playing
+-- cards are bought like with the Buy button, vouchers are redeemed and booster packs opened like
+-- with their own buttons. Refused (ok = false) if it can't be afforded or there is no room.
+HANDLERS.buy = { gated = true, fn = function(m)
+    local card = objs[m.target or -1]
+    if not is_a(card, Card) or not card.area then return false end
+    local area = card.area
+    if area ~= G.shop_jokers and area ~= G.shop_vouchers and area ~= G.shop_booster then return false end
+    local cost = card.cost or 0
+    if cost > 0 and cost > (G.GAME.dollars or 0) - (G.GAME.bankrupt_at or 0) then return false end
+    if area == G.shop_jokers then
+        return G.FUNCS.buy_from_shop({ config = { ref_table = card } }) ~= false
+    end
+    G.FUNCS.use_card({ config = { ref_table = card } }) -- redeem the voucher / open the pack
+    return true
+end }
+
+-- "Next Round" on the VR shop counter: clicks the shop's own Next Round button
+HANDLERS.next_round = { gated = true, fn = function()
+    return G.STATE == G.STATES.SHOP and click_ui_button("next_round_button", G.shop) -- (in the shop's own UIBox)
 end }
 
 -- A tarot / planet / spectral card used with a VR gesture (dropped on the hand, thrown into the sky)

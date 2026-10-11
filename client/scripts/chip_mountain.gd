@@ -3,8 +3,8 @@ extends Node3D
 ## A mountain of poker chips on the casino table: every chip scored in this run, added up.
 ## It starts as a little stack (a few hundred points) and grows with the run's score – the scale
 ## is logarithmic, so about 10 million points reach the ceiling. The colour of the chips changes
-## with each power of ten (white hundreds, red thousands, blue ten-thousands, green, black,
-## purple millions, gold beyond).
+## with each power of ten (white hundreds, red thousands, blue ten-thousands, green hundred-thousands,
+## black millions, purple ten millions, gold beyond). Beyond 10 million a second mountain (log_from / log_to) grows on.
 ##
 ## Thousands of chips are drawn with one MultiMesh. Every chip slot is prepared once, sorted by the
 ## mountain height at which it appears, so growing only means showing more of them.
@@ -19,9 +19,14 @@ const LOG_FROM := 2.0           # 100 points: the very first chip
 const LOG_TO := 7.0             # 10 million points: up to the ceiling
 const CURVE := 1.6              # small scores stay small, then it takes off
 const BANDS := [Color(0.92, 0.92, 0.9), Color(0.85, 0.12, 0.12), Color(0.15, 0.35, 0.9),
-		Color(0.1, 0.6, 0.25), Color(0.08, 0.08, 0.09), Color(0.55, 0.2, 0.75), Color(0.95, 0.75, 0.2)]
+		Color(0.1, 0.6, 0.25), Color(0.08, 0.08, 0.09), Color(0.55, 0.2, 0.75), Color(0.95, 0.75, 0.2),
+		# (the second mountain, beyond 10 million: orange, cyan, pink, silver)
+		Color(1.0, 0.45, 0.1), Color(0.2, 0.85, 0.9), Color(1.0, 0.4, 0.7), Color(0.85, 0.88, 0.95)]
 
 var ceiling := MAX_HEIGHT       # local height of the room's ceiling (set by the casino)
+var log_from := LOG_FROM        # the score range of this mountain (powers of ten); a second mountain
+var log_to := LOG_TO            # takes over where the first one reaches the ceiling
+var label_until := INF          # from this total on another mountain shows the count
 var _mm: MultiMeshInstance3D
 var _thresholds := PackedFloat32Array()   # mountain height at which each instance appears (sorted)
 var _target := 0.0              # run total from the game
@@ -49,9 +54,9 @@ func set_total(total: float) -> void:
 
 
 func height_for(total: float) -> float:
-	if total < 100.0:
-		return 0.0 if total <= 0.0 else CHIP_HEIGHT
-	var k := clampf((log(total) / log(10.0) - LOG_FROM) / (LOG_TO - LOG_FROM), 0.0, 1.0)
+	if total < pow(10.0, log_from):
+		return CHIP_HEIGHT if total > 0.0 and log_from <= LOG_FROM else 0.0 # (a second mountain waits)
+	var k := clampf((log(total) / log(10.0) - log_from) / (log_to - log_from), 0.0, 1.0)
 	return maxf(minf(ceiling, MAX_HEIGHT) * pow(k, CURVE), CHIP_HEIGHT)
 
 
@@ -82,7 +87,7 @@ func _update_view() -> void:
 			hi = mid
 	_mm.multimesh.visible_instance_count = lo
 	if _label != null:
-		_label.visible = _shown > 0.0
+		_label.visible = h > 0.0 and _shown < label_until
 		_label.text = "%s chips this run" % _big(_shown)
 		# at the foot of the mountain, on your side
 		_label.position = Vector3(0, 0.05, BASE_RADIUS + SPREAD * h + 0.04)
@@ -172,7 +177,7 @@ func _height_for_column(need: float, d: float) -> float:
 ## Chips at the height that a given power of ten reaches get that power's colour.
 func _band_colour(y: float) -> Color:
 	var k := pow(clampf(y / minf(ceiling, MAX_HEIGHT), 0.0, 1.0), 1.0 / CURVE)
-	var decade := int(LOG_FROM + k * (LOG_TO - LOG_FROM)) - 2
+	var decade := int(log_from + k * (log_to - log_from)) - 2
 	return BANDS[clampi(decade, 0, BANDS.size() - 1)]
 
 

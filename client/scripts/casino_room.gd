@@ -30,6 +30,7 @@ const ANTE_ROOM_X := -2.6                      # the Ante Room's doorway in the 
 const ANTE_DOOR := Vector2(1.1, 2.15)          # its width and height
 const KIDS_DOOR_Z := -0.55                     # the Wee Joker Kids Corner's little door in the left wall
 const CHIP_MOUNTAIN_POS := Vector3(-0.8, 0.0, -0.05) # layout space: on the left end of the card table
+const CHIP_MOUNTAIN_2_POS := Vector3(1.0, 0.0, -0.05) # ... and the second one on the right end
 const LAMP_X := 0.2                            # table space: the pendant lamp, right of the chip mountain
 const LAMP_WIDTH := 1.2
 
@@ -74,6 +75,7 @@ var _hall_fame: Array[Label3D] = []        # [names, values]
 var _hall_shame: Array[Label3D] = []
 var _last_stats := {}
 var _chip_mountain: ChipMountain
+var _chip_mountain_2: ChipMountain # beyond 10 million
 var _sconces: Array[Node3D] = []
 var _run_chips := 0.0
 var _wood: StandardMaterial3D
@@ -321,10 +323,21 @@ func place_table(layout: Transform3D, table_y: float) -> void:
 	if _chip_mountain == null: # built once the table height is known (it reaches up to the ceiling)
 		_chip_mountain = ChipMountain.new()
 		_chip_mountain.ceiling = ROOM_HEIGHT - table_y - 0.05
+		_chip_mountain.label_until = pow(10.0, ChipMountain.LOG_TO) # the second one counts on from there
 		_chip_mountain.position = CHIP_MOUNTAIN_POS - TABLE_CENTER
 		_table.add_child(_chip_mountain)
 		_chip_mountain.set_total(_run_chips)
+		# the first mountain reaches the ceiling at 10 million: then a second one wakes up on the
+		# other end of the table and grows on up to a trillion
+		_chip_mountain_2 = ChipMountain.new()
+		_chip_mountain_2.ceiling = _chip_mountain.ceiling
+		_chip_mountain_2.log_from = ChipMountain.LOG_TO
+		_chip_mountain_2.log_to = 12.0
+		_chip_mountain_2.position = CHIP_MOUNTAIN_2_POS - TABLE_CENTER
+		_table.add_child(_chip_mountain_2)
+		_chip_mountain_2.set_total(_run_chips)
 	_chip_mountain.ceiling = ROOM_HEIGHT - table_y - 0.05
+	_chip_mountain_2.ceiling = _chip_mountain.ceiling
 
 
 ## Every chip scored in this run: the chip mountain on the left of the table.
@@ -332,6 +345,7 @@ func set_run_chips(total: float) -> void:
 	_run_chips = total
 	if _chip_mountain != null:
 		_chip_mountain.set_total(total)
+		_chip_mountain_2.set_total(total)
 
 
 # ---------------------------------------------------------------- room shell

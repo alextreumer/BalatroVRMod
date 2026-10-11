@@ -109,6 +109,16 @@ func _ready() -> void:
 	_box(Vector3(0.012, 0.02, 0.02), Vector3(0.053, 0.06, 0), gold) # hinge
 
 
+## Left-handed mode: the lever moves to the machine's left side, towards the left (pointing) hand.
+func set_mirrored(on: bool) -> void:
+	if _arm == null:
+		return
+	var s := -1.0 if on else 1.0
+	_arm.position.x = 0.058 * s
+	for c in _arm.get_children():
+		(c as Node3D).position.x = 0.006 * s
+
+
 func _box(size: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var b := BoxMesh.new()

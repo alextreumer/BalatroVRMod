@@ -111,9 +111,9 @@ func apply_scene(scene: Dictionary) -> void:
 			continue
 		var gid := int(it.get("g", 0))
 		var group_role := str(group_info.get(gid, {}).get("role", ""))
-		# VR: jokers and consumables stand on the joker board as 3D models / cards in the rack
-		if keep_hand_separate and (group_role in ["area:jokers", "area:consumeables"]
-				or (kind == "c" and it.get("area", "") in ["jokers", "consumeables"])):
+		# VR: jokers and consumables stand on the joker board, the shop's items on the sales counter
+		if keep_hand_separate and (group_role in ["area:jokers", "area:consumeables", "shop"] # (the shop: a counter in VR)
+				or (kind == "c" and it.get("area", "") in ["jokers", "consumeables", "shop_jokers", "shop_vouchers", "shop_booster"])):
 			continue
 		if _hidden_in_compact(it, group_role):
 			continue

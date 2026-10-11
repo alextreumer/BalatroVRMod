@@ -16,6 +16,7 @@ var eyes: Callable                 # -> Vector3
 
 var _labels: Array[Label3D] = []
 var _panel: MeshInstance3D
+var _height := 0.2                 # of all the buttons (set in setup)
 
 
 func setup(entries: Array) -> void:
@@ -24,6 +25,7 @@ func setup(entries: Array) -> void:
 		c.queue_free()
 	_labels.clear()
 	var h := items.size() * (BUTTON.y + GAP) + 0.03
+	_height = h
 	_panel = MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(BUTTON.x + 0.02, h + 0.025, 0.004)
@@ -100,7 +102,8 @@ func _process(_delta: float) -> void:
 	if not visible or hand == null:
 		return
 	# above the card hand, turned towards you
-	var at := hand.global_position + Vector3(0, 0.2, 0)
+	# its lower edge a little above the hand: the hand (or the clown glove) never covers the buttons
+	var at := hand.global_position + Vector3(0, _height + 0.05, 0)
 	var e: Vector3 = eyes.call() if eyes.is_valid() else at + Vector3.BACK
 	var to := e - at
 	if to.length() > 0.01:

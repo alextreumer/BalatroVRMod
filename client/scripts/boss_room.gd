@@ -2,7 +2,7 @@ class_name BossRoom
 extends Node3D
 ## The casino changes with the boss blind you are playing against (the colour of the room comes
 ## from the boss chip, see CasinoRoom.set_boss):
-##   The Wall      the walls close in
+##   The Wall      a brick wall rises from the floor all around you and the table
 ##   The Water     wave light plays over the ceiling
 ##   The Needle    everything goes dark but the table
 ##   The Flint     all lights at half strength
@@ -29,6 +29,10 @@ var _face: MeshInstance3D          # eye / mouth on the big screen
 var _bubbles: CPUParticles3D
 var _chains: Node3D
 var _snake: Array[MeshInstance3D] = []
+var _ring: MeshInstance3D          # The Wall
+var _ring_rise := 0.0
+const RING_RADIUS := 1.6
+const RING_HEIGHT := 2.7
 
 
 func _ready() -> void:
@@ -37,6 +41,7 @@ func _ready() -> void:
 	_build_bubbles()
 	_build_chains()
 	_build_snake()
+	_build_wall_ring()
 	_show("")
 
 
@@ -46,6 +51,7 @@ func apply(key: String, calm: bool) -> void:
 		return
 	if key != _key:
 		_amount = 0.0
+		_ring_rise = 0.0
 	_key = key
 	_calm = calm
 	_show(key)
@@ -57,10 +63,11 @@ func _show(key: String) -> void:
 	(_face.material_override as ShaderMaterial).set_shader_parameter("mouth", key == "bl_mouth")
 	_bubbles.emitting = key == "bl_fish" and not _calm
 	_chains.visible = key == "bl_manacle"
+	_ring.visible = key == "bl_wall"
 	for s in _snake:
 		s.visible = key == "bl_serpent"
 	room.set_boss_effects(
-		0.82 if key == "bl_wall" else 1.0,                                    # room size
+		1.0,                                                                  # room size (unused now)
 		0.85 if key == "bl_needle" else (0.5 if key == "bl_flint" else 0.0),  # darkness
 		key == "bl_wheel" and not _calm)                                      # machines run wild
 
@@ -78,6 +85,13 @@ func _process(delta: float) -> void:
 			m.set_shader_parameter("look", Vector2(clampf(to.x / 3.0, -1.0, 1.0), clampf(to.y / 2.0, -1.0, 1.0)))
 	if _caustics.visible:
 		(_caustics.material_override as ShaderMaterial).set_shader_parameter("strength", 0.5 * _amount)
+	if _ring.visible: # The Wall: rises slowly, centred between you and the table
+		_ring_rise = minf(_ring_rise + delta / 6.0, 1.0)
+		var r := _ring_rise * _ring_rise * (3.0 - 2.0 * _ring_rise)
+		var centre := room._table.global_position
+		if eyes.is_valid():
+			centre = centre.lerp(eyes.call(), 0.5)
+		_ring.global_position = Vector3(centre.x, -RING_HEIGHT * 0.5 + RING_HEIGHT * r, centre.z)
 	if _snake[0].visible: # the serpent winds along a slow loop over the ceiling
 		for i in _snake.size():
 			var t := _time * 0.35 - i * 0.018
@@ -194,6 +208,26 @@ func _build_chains() -> void:
 			_chains.add_child(bolt)
 
 
+## The Wall: a round brick wall around you and the table (open at the top), rising from the floor.
+func _build_wall_ring() -> void:
+	_ring = MeshInstance3D.new()
+	var c := CylinderMesh.new()
+	c.top_radius = RING_RADIUS
+	c.bottom_radius = RING_RADIUS
+	c.height = RING_HEIGHT
+	c.radial_segments = 64
+	c.rings = 1
+	c.cap_top = false
+	c.cap_bottom = false
+	_ring.mesh = c
+	var m := ShaderMaterial.new()
+	m.shader = Shader.new()
+	m.shader.code = BRICKS
+	_ring.material_override = m
+	_ring.visible = false
+	add_child(_ring)
+
+
 ## A glowing serpent: a string of spheres, thick at the head and thin at the tail.
 func _build_snake() -> void:
 	var n := 70
@@ -218,6 +252,33 @@ func _build_snake() -> void:
 
 
 # ---------------------------------------------------------------- shaders
+
+## Old bricks in the wall's own coordinates (they rise with it): rows offset by half a brick,
+## each brick a slightly different red-brown, grey mortar, darker towards the floor.
+const BRICKS := """
+shader_type spatial;
+render_mode cull_disabled;
+varying vec3 p;
+
+float h(vec2 v) { return fract(sin(dot(v, vec2(127.1, 311.7))) * 43758.5453); }
+
+void vertex() { p = VERTEX; }
+
+void fragment() {
+	float around = atan(p.x, p.z) * 1.6;           // 1.6 m radius: one unit = one metre
+	vec2 b = vec2(around / 0.24, (p.y + 10.0) / 0.075);
+	float row = floor(b.y);
+	b.x += mod(row, 2.0) * 0.5;
+	vec2 id = vec2(floor(b.x), row);
+	vec2 f = fract(b);
+	float mortar = step(f.x, 0.05) + step(f.y, 0.12);
+	vec3 brick = mix(vec3(0.42, 0.14, 0.09), vec3(0.6, 0.25, 0.15), h(id));
+	brick *= 0.8 + 0.2 * h(id + floor(f * 6.0));      // a little grain
+	vec3 c = mix(brick, vec3(0.32, 0.3, 0.28), clamp(mortar, 0.0, 1.0));
+	ALBEDO = c;
+	ROUGHNESS = 0.95;
+}
+"""
 
 ## Water light on the ceiling: two drifting layers of bright, wobbling cells.
 const CAUSTICS := """

@@ -279,8 +279,8 @@ func _video_poker(m: Node3D) -> void:
 	var screen := _quad(head, Vector2(0.5, 0.36), Vector3(0, 0, 0.088), _shader_mat(VIDEO_POKER, {}))
 	screen.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_box(m, Vector3(0.62, 0.2, 0.3), Vector3(0, 1.48, -0.1), _mat(Color(0.6, 0.05, 0.1), 0.3))
-	_label(m, "VIDEO POKER", 64, 0.0012, Color(3.0, 2.7, 1.2), Vector3(0, 1.51, 0.055))
-	_label(m, "Jacks or Better", 32, 0.0009, Color(1.0, 0.85, 0.5), Vector3(0, 1.43, 0.055))
+	_label(m, "BALA-RETRO", 64, 0.0012, Color(3.0, 2.7, 1.2), Vector3(0, 1.51, 0.055))
+	_label(m, "VIDEO POKER", 40, 0.0011, Color(1.0, 0.85, 0.5), Vector3(0, 1.43, 0.055))
 	_bulb_row(m, Vector3(0, 1.6, 0.05), 0.58, 10)
 	_stool(m)
 

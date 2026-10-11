@@ -75,6 +75,8 @@ Flat JSON objects; `id` is returned in the `ack`:
 | `open_pack` | – | Opens the booster pack that waits for VR (torn open) |
 | `reroll` | – | Rerolls the shop (VR lever), if affordable |
 | `sell` | `target` | Sells a joker or consumable (VR coin slot) |
+| `buy` | `target` | Buys an item of the shop (VR sales counter): joker / card like the Buy button, voucher redeemed, pack opened; refused if it can't be paid or there is no room |
+| `next_round` | – | Leaves the shop (VR NEXT ROUND button): clicks the shop's own Next Round button |
 | `use` | `target` | Uses a tarot / planet / spectral card (VR gesture), if usable now |
 | `deck_view` | `on` | Opens/closes "View Deck" (only closes the overlay it opened itself) |
 | `highlight` | `index` (1-based), `on` | Select a hand card |

@@ -2,11 +2,11 @@ class_name VRTutorial
 extends Node3D
 ## Jimbo's tips: a small board floating in front of you on the very first start in VR (and again
 ## from the game's Options menu, "VR: Show Tips"). A few pages on the gestures; "Next" and "Skip"
-## are clicked with the beam like everything else. Jimbo stands beside it.
+## are clicked with the beam like everything else.
 
 signal finished
 
-const SIZE := Vector2(0.54, 0.36)
+const SIZE := Vector2(0.56, 0.42)
 const NEXT_ID := -10
 const SKIP_ID := -11
 
@@ -16,8 +16,6 @@ var _title: Label3D
 var _text: Label3D
 var _dots: Label3D
 var _next_label: Label3D
-var _jimbo: Node3D
-var _time := 0.0
 
 
 func setup(pages: Array) -> void:
@@ -56,13 +54,6 @@ func _build() -> void:
 	_dots = _label(40, 0.0008, Color(0.7, 0.75, 0.8), Vector3(0, -SIZE.y * 0.5 + 0.03, 0.006))
 	_next_label = _button("Next", Vector3(SIZE.x * 0.5 - 0.07, -SIZE.y * 0.5 + 0.03, 0.006), Color(0.95, 0.4, 0.3), NEXT_ID)
 	_button("Skip", Vector3(-SIZE.x * 0.5 + 0.06, -SIZE.y * 0.5 + 0.03, 0.006), Color(0.4, 0.45, 0.5), SKIP_ID)
-	var scene := load("res://jokers/jimbo_companion.tscn") as PackedScene
-	if scene != null:
-		_jimbo = scene.instantiate()
-		_jimbo.scale = Vector3.ONE * 1.6
-		_jimbo.position = Vector3(-SIZE.x * 0.5 - 0.09, -SIZE.y * 0.5 - 0.02, 0.03)
-		_jimbo.rotation_degrees.y = 20.0
-		add_child(_jimbo)
 	GameFont.apply_to(self)
 
 
@@ -131,8 +122,3 @@ func _show() -> void:
 	_dots.text = dots.strip_edges()
 	_next_label.text = "Let's go!" if _page == _pages.size() - 1 else "Next"
 
-
-func _process(delta: float) -> void:
-	_time += delta
-	if _jimbo != null and visible: # Jimbo bobs a little while he talks
-		_jimbo.position.y = -SIZE.y * 0.5 - 0.02 + absf(sin(_time * 3.0)) * 0.01

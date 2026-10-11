@@ -38,16 +38,17 @@ const SHOULDER_RADIUS := 0.6
 const PANEL_POS := Vector3(BOARD_HALF_WIDTH + 0.12, 0.0, 0.2)  # run panel right of the board
 const PANEL_YAW := -25.0
 const PANEL_SCALE := 0.75
-const SHOP_POS := Vector3(0, TABLE_Y, 0.4)
+const SHOP_POS := Vector3(0, TABLE_Y + 0.2, 0.06) # the shop's panel (Next Round ...) stands behind the sales counter
+const SHOP_TILT := -30.0                         # leaning back (-90 would lie flat on the table)
 const SHOP_SIGN_SIZE := Vector2(0.264, 0.132)  # the game's 4.4 x 2.2 sign at board scale
 const SHOP_SIGN_DISTANCE := 0.26                # behind the shop's far edge (meters)
 const SHOP_SIGN_HEIGHT := 0.07                  # lifted above the table
 const SHOP_SIGN_TILT := 60.0                    # leaning back, facing the player
 const SHOP_SIGN_FPS := 8.0
-const CHIP_POS := Vector3(0, -0.12, 0.55)       # in front of the player, a bit below eye level
+const CHIP_POS := Vector3(0.32, -0.24, 0.62)    # at the pointing hand, a bit above the joker board (play gesture)
 
 # Joker board: a flat mat for the real table; the jokers (on pedestals) and the draw pile live on it
-const JOKER_TABLE_POS := Vector3(0.6, TABLE_Y, 0.25) # on the table right of the shop
+const JOKER_TABLE_POS := Vector3(0.0, TABLE_Y, 0.55) # right in front of you, within reach
 const JOKER_TABLE_SIZE := Vector2(0.925, 0.45)  # width x depth (meters): jokers in the middle, reroll machine and coin slot at the ends
 const JOKER_TABLE_TOP := 0.012                  # height of the mat surface
 const JOKER_TABLE_MARGIN := 0.05                # keeps pedestals/pile inside the mat when moved
@@ -431,6 +432,8 @@ func _apply_scene(scene: Dictionary) -> void:
 		_set_heat(_hand_flames)
 	_board.apply_scene(scene)
 	_update_bag_counts(scene) # "JOKERS 3/5", "CONSUMABLES 1/2" on the card stand
+	if _counter != null and _vr: # the shop's items on the sales counter
+		_counter.sync(scene.get("items", []), int(_state.get("round", {}).get("dollars", 0)))
 	for uid in _jokers: # card art for jokers without a 3D model (comes with the scene)
 		if is_instance_valid(_jokers[uid]):
 			_refresh_card_stand(_jokers[uid], uid)
@@ -1239,7 +1242,7 @@ func _update_pointer(target: Dictionary, delta: float) -> void:
 				_drop_target = -1 # pointing elsewhere: releasing now cancels
 			if _drag_area == "hand" and _vr:
 				_rebuild_hand(_hand_items) # live preview of the new order in the fan
-	elif id >= 0 and not _hover_sent and (_hover_kind == "card" or _hover_kind == "tip"):
+	elif id >= 0 and not _hover_sent and _hover_kind in ["card", "tip", "shopitem"]:
 		_hover_time += delta
 		if _hover_time >= HOVER_DELAY:
 			_send({"cmd": "hover", "target": id})
@@ -1265,6 +1268,9 @@ func _press_target(target: Dictionary) -> void:
 	elif target.get("kind", "") == "pack":
 		if _pack != null and is_instance_valid(_pack):
 			_pack.rip() # the shortcut: trigger on the waiting booster pack
+	elif target.get("kind", "") == "nextround":
+		_send({"cmd": "next_round"}) # the red button above the reroll machine
+		_buzz(0.4, 0.05)
 	elif target.get("kind", "") == "wrist":
 		if _wrist != null and _wrist.visible: # (a closed menu never reacts)
 			_wrist.press(id) # a button of the menu above the card hand
@@ -1380,6 +1386,8 @@ func _update_drag_feedback() -> void:
 func _popup_anchor_for(owner_id: int):
 	if owner_id == _touch_uid and _touched_node() != null:
 		return _joker_tip_anchor(_touched_node()) # a touched 3D joker / rack card: its tooltip above it
+	if _counter != null and _counter.has_item(owner_id): # an item on the shop counter: above it
+		return _counter.tip_anchor(owner_id)
 	var card = _hand_cards.get(owner_id)
 	if card == null or not is_instance_valid(card):
 		return null
@@ -1757,7 +1765,7 @@ func _is_behind_shoulder(pos: Vector3) -> bool:
 const CALIB_LABELS := {
 	"Spieltafel": "Game Board", "Blind-Chip": "Blind Chip", "Joker-Tafel": "Joker Board",
 	"Kartenstapel": "Deck", "Geldstapel": "Money","Kartenfächer": "Card Fan", "Gegriffene Karten": "Grabbed Cards",
-	"Run-Panel": "Run Panel", "Shop": "Shop", "Reroll-Automat": "Reroll Machine", "Münzschlitz": "Coin Slot", "Kartentasche": "Card Stand",
+	"Run-Panel": "Run Panel", "Shop": "Shop", "Reroll-Automat": "Reroll Machine", "Münzschlitz": "Coin Slot", "Kartentasche": "Card Stand", "Ladentheke": "Shop Counter",
 }
 
 
@@ -1838,6 +1846,7 @@ func _set_calibrating(on: bool) -> void:
 		_deck.visible = true
 		_coins.visible = true
 		_joker_table.visible = true
+		_counter.visible = true
 		_set_status("Calibration active")
 	else:
 		_save_layout()
@@ -1882,7 +1891,7 @@ func _update_calibration(delta: float) -> void:
 		_calib_scale = clampf(_calib_scale * (1.0 + stick.y * delta * 0.8), 0.2, 4.0)
 	var t := _calib_hand.global_transform * _calib_offset
 	node.global_transform = Transform3D(t.basis * Basis.from_scale(Vector3.ONE * _calib_scale), t.origin)
-	if _calib_grabbed == "Joker-Tafel":
+	if _calib_grabbed in ["Joker-Tafel", "Ladentheke"]: # these stand upright, turned only around the vertical
 		_keep_level(node)
 	if on_table:
 		_keep_on_joker_table(node)
@@ -1959,7 +1968,9 @@ func _toggle_wrist_menu() -> void:
 			{"label": func(): return "Calm Lights: " + ("On" if _calm else "Off"), "action": func(): _set_calm(not _calm)},
 			{"label": func(): return "Hands: " + ("On" if _hands_on else "Off"), "action": func(): _set_hands(not _hands_on)},
 			{"label": func(): return "Casino Sounds: " + ("On" if _ambience_on else "Off"), "action": func(): _set_ambience(not _ambience_on)},
-			{"label": func(): return "Spectator: " + Spectator.NAMES[_spectator.mode], "action": func(): _spectator.next_mode()},
+			{"label": func(): return "Spectator: " + ("Off" if _spectator.mode == Spectator.Mode.OFF else "On"), "action": func(): _spectator.toggle()},
+			{"label": func(): return "Camera: " + Spectator.NAMES[_spectator.mode if _spectator.mode != Spectator.Mode.OFF else _spectator.last_view],
+				"action": func(): _spectator.next_view()},
 			{"label": func(): return "Switch Hands", "action": func(): _set_left_handed(not _left_handed)},
 			{"label": func(): return "Show Tips", "action": func():
 				_wrist.visible = false
@@ -2034,6 +2045,8 @@ func _load_settings() -> void:
 func _show_tutorial() -> void:
 	if not _vr:
 		return
+	if _first_hint != null and is_instance_valid(_first_hint):
+		_first_hint.queue_free() # found them
 	var point := "left" if _left_handed else "right"
 	var cards := "right" if _left_handed else "left"
 	var play := "X" if _left_handed else "A"
@@ -2041,11 +2054,13 @@ func _show_tutorial() -> void:
 	var recenter := "B" if _left_handed else "Y"
 	var backdrop := "A" if _left_handed else "X"
 	var pages := [
-		["Hi, I'm Jimbo!", "Welcome to Balatro in VR. Your cards are in your %s hand. Point at them with your %s hand and pull the trigger to select them - just like clicking." % [cards, point]],
+		["Hi, I'm Alex!", "Welcome to Balatro in VR. Once a round starts, your cards are in your %s hand. Point at them with your %s hand and pull the trigger to select them - just like clicking." % [cards, point]],
 		["Play & discard", "Grab the selected cards with your %s grip and let go over the golden blind chip to play them (or press %s). Throw them over your shoulder to discard (or press %s)." % [point, play, discard]],
-		["Your table", "Jokers stand on the board: touch one to read it, grab it to move it - left to right is their order. Drop one into the SELL slot to sell it. Lift it and look underneath for its price. Pull the slot machine's lever to reroll the shop."],
-		["Packs & cards", "Booster packs float up to you: grab them with both hands and tear them open (or point and pull the trigger). Tarot and planet cards wait in the little bag - point at one and pull the trigger to use it."],
-		["Make it yours", "The menu button (≡) on your left controller opens the VR settings above your card hand: layout, sitting / standing, background, Calm Lights, sounds, spectator camera. %s brings everything in front of you, %s changes the background. Have fun!" % [recenter, backdrop]],
+		["Your table", "Jokers stand on the board: touch one to read it, grab it to move it - left to right is their order. Drop one into the SELL slot to sell it. Lift it and look underneath for its price. In the shop, take what you want off the sales counter and pull it towards you to buy it; pull the slot machine's lever to reroll."],
+		["Packs & cards", "Booster packs float up to you: grab them with both hands and tear them open (or point and pull the trigger). Tarot and planet cards stand in the card stand - point at one and pull the trigger to use it."],
+		["The deck", "Hold your hand over the 3D deck on the table: it shows which cards are still left in it. Take your hand away and the view closes again."],
+		["Put things where you like", "Everything can be moved: menu button (≡) on your left controller, then Adjust VR Layout. Grab an orange handle with the grip and move, turn or resize the game board, run panel, shop, joker board, deck, money, slot machine, coin slot, card stand, blind chip and your card fan. Press ≡ again to save. Sitting and standing each keep their own layout."],
+		["Make it yours", "The VR menu (≡) also has the background, Calm Lights, sounds, the spectator camera and these tips. %s brings everything in front of you, %s changes the background. Have fun!" % [recenter, backdrop]],
 	]
 	if _tutorial == null:
 		_tutorial = VRTutorial.new()
@@ -2148,6 +2163,9 @@ func _set_left_handed(on: bool) -> void:
 ## Gives the beam and the fan of cards to the right hands for the current mode.
 func _apply_handedness() -> void:
 	_update_calibration_help()
+	if _lever != null:
+		_lever.set_mirrored(_left_handed) # the lever on the side of the pointing hand
+		_place_shop_props()
 	if not _vr:
 		return
 	_point = _left if _left_handed else _right
@@ -2387,9 +2405,9 @@ func _build_scene() -> void:
 	_register_calibratable("Joker-Tafel", _joker_table, false, 0.25)
 	_register_calibratable("Kartenstapel", _deck, true, 0.17) # handle above the "52 / 52" count
 	_register_calibratable("Geldstapel", _coins, true)
-	_register_calibratable("Reroll-Automat", _lever, true, 0.19) # handle above the lever's red ball
 	_register_calibratable("Münzschlitz", _coin_slot, true, 0.1)
 	_register_calibratable("Kartentasche", _bag, true, 0.16) # handle above the cards in the stand
+	_register_calibratable("Ladentheke", _counter, false, 0.2) # the shop's sales counter: anywhere in the room, kept upright
 	# (no handles for the joker places: every joker is simply picked up and put where you like)
 	if _vr: # position, tilt and size of the card fan, relative to the hand that holds it
 		_register_calibratable("Kartenfächer", _fan_anchor)
@@ -2400,11 +2418,22 @@ func _build_scene() -> void:
 	if _spectator != null: # from here on every change (Options button or keys 1-3 in its window) is kept
 		_spectator.mode_changed.connect(func(_m): _save_spectator())
 	_load_layout()
-	if _vr: # the very first start: Jimbo's tips, once the headset knows where you look
-		var cfg := ConfigFile.new()
-		cfg.load(LAYOUT_FILE)
-		if not cfg.get_value("settings", "tutorial_done", false):
-			get_tree().create_timer(2.0).timeout.connect(_show_tutorial)
+	# until the tips have been looked at once: a single line pointing to them (not the tips
+	# themselves - on the first start nothing of the game is there yet that they talk about)
+	var cfg := ConfigFile.new()
+	cfg.load(LAYOUT_FILE)
+	if _vr and not cfg.get_value("settings", "tutorial_done", false):
+		_first_hint = Label3D.new()
+		_first_hint.text = "First time? Check the Tips: menu button (≡) on your left controller,\nor Options → VR Settings → Show Tips in Balatro"
+		_first_hint.font_size = 40
+		_first_hint.pixel_size = 0.0009
+		_first_hint.outline_size = 10
+		_first_hint.modulate = Color(1.0, 0.85, 0.4)
+		_first_hint.position = Vector3(0, 0.43, 0.02) # just above the game board
+		_layout.add_child(_first_hint)
+		get_tree().create_timer(90.0).timeout.connect(func(): # don't nag for the whole session
+			if is_instance_valid(_first_hint):
+				_first_hint.queue_free())
 	_apply_handedness()
 
 
@@ -2420,11 +2449,11 @@ func _build_anchors() -> void:
 	_board.anchors["HUD_blind"] = {"node": hud, "ref": "HUD"} # blind info stays on top of the panel
 	_register_calibratable("Run-Panel", hud)
 
-	# Shop lies flat on the table in front of the player
+	# Shop on the table behind the joker board, leaning towards the player like a counter display
 	var shop := Node3D.new()
 	shop.name = "ShopAnchor"
 	shop.position = SHOP_POS
-	shop.rotation_degrees = Vector3(-90, 0, 0)
+	shop.rotation_degrees = Vector3(SHOP_TILT, 0, 0)
 	_layout.add_child(shop)
 	_board.anchors["shop"] = {"node": shop}
 
@@ -2437,8 +2466,10 @@ func _build_anchors() -> void:
 	_shop_sign.visible = false
 	shop.add_child(_shop_sign)
 	# grab the shop by its SHOP sign: the handle sits right above the sign
-	_register_calibratable("Shop", shop, false, -1.0,
-			Vector3(0, SHOP_SIGN_DISTANCE, SHOP_SIGN_HEIGHT + SHOP_SIGN_SIZE.y * 0.5 + 0.03))
+	# (in VR the shop is the sales counter, calibrated on its own - "Shop Counter")
+	if not _vr:
+		_register_calibratable("Shop", shop, false, -1.0,
+				Vector3(0, SHOP_SIGN_DISTANCE, SHOP_SIGN_HEIGHT + SHOP_SIGN_SIZE.y * 0.5 + 0.03))
 
 
 func _build_chip() -> void:
@@ -2560,6 +2591,7 @@ func _build_xr_rig() -> void:
 		var p := _layout.to_global(PLAY_ROW).lerp(_joker_table.global_position, 0.5)
 		p.y = _joker_table.global_position.y
 		return p
+	_spectator.badge_hand = func(): return _holder # the LIVE badge sits on the card hand's wrist
 	add_child(_spectator)
 
 	# beam and fan get their hand in _apply_handedness()
@@ -2626,7 +2658,8 @@ const LEVER_POS := Vector3(0.385, JOKER_TABLE_TOP, 0.06)   # reroll machine (poi
 const SLOT_POS := Vector3(-0.385, JOKER_TABLE_TOP, 0.1)    # coin slot (other end)
 const BAG_POS := Vector3(-0.385, JOKER_TABLE_TOP, -0.1)   # the bag with the consumables (other end of the board)
 const BAG_SIZE := Vector3(0.2, 0.03, 0.07)    # the card stand: width, height, depth
-const PLAY_ROW := Vector3(0.0, TABLE_Y, 0.3)    # the played-cards stand (layout space; the shop's spot)
+const PLAY_ROW := Vector3(0.0, TABLE_Y, 0.15)   # the played-cards stand (layout space): behind the joker board
+const SHOP_COUNTER_POS := Vector3(0.0, TABLE_Y, 0.22) # the sales counter (layout space): behind the joker board
 const PLAY_SPACING := 0.085
 const PLAY_STAND_SIZE := Vector2(0.5, 0.13)     # width x depth of the slanted board
 const PLAY_TILT := 35.0                         # degrees; the back edge is raised
@@ -2644,6 +2677,8 @@ var _lever: RerollLever
 var _coin_slot: Node3D
 var _bag: Node3D                 # the leather bag the consumables stand in
 var _play_stand: Node3D
+var _counter: ShopCounter         # the shop as a sales counter on the table (VR)
+var _next_round: Node3D          # the Next Round button above the reroll machine (VR)
 var _play_cards := {}            # card id -> card lying on the table
 var _hand_last := {}             # hand card id -> its last transform (played cards fly from there)
 var _consumables := {}           # uid -> card standing in the rack
@@ -2678,6 +2713,21 @@ func _build_table_fun() -> void:
 	_layout.add_child(_play_stand)
 	_play_stand.position = PLAY_ROW
 	_play_stand.visible = false
+	_counter = ShopCounter.new()
+	_counter.make_card = _make_table_card
+	_counter.apply_art = func(face: Node3D, it: Dictionary): CardArt.apply_layers(face, CardArt.card_layers(it), TABLE_CARD, 0.0003)
+	_layout.add_child(_counter)
+	_counter.position = SHOP_COUNTER_POS
+	_counter.visible = false
+	_counter.buy.connect(func(uid: int): _send({"cmd": "buy", "target": uid}))
+	if _vr: # the shop is the counter: the reroll machine, Next Round and the SHOP sign belong to it
+		_lever.reparent(_counter, false)
+		_build_next_round_button()
+		_shop_sign.reparent(_counter, false)
+		_shop_sign.position = Vector3(0, ShopCounter.TOP * 0.45, ShopCounter.DEPTH * 0.5 + 0.012)
+		_shop_sign.rotation_degrees = Vector3(-10, 0, 0)
+		_shop_sign.scale = Vector3.ONE * 0.62
+		_place_shop_props()
 	_sounds = SoundBank.new()
 	add_child(_sounds)
 	_sounds.where = _sound_position
@@ -2697,6 +2747,57 @@ func _build_table_fun() -> void:
 
 func _eyes() -> Vector3:
 	return _head.global_position if _vr else _camera.global_position
+
+
+## The reroll machine stands at the end of the shop counter on the side of your pointing hand,
+## with the Next Round button above it (left-handed: the other end, lever mirrored).
+func _place_shop_props() -> void:
+	if _counter == null or _lever.get_parent() != _counter:
+		return
+	const MACHINE_SCALE := 1.6 # a bit taller than the counter (cabinet 0.116 -> 0.19): the lever is easy to reach
+	var side := -1.0 if _left_handed else 1.0
+	var x := side * (ShopCounter.WIDTH * 0.5 + 0.055 * MACHINE_SCALE + 0.01)
+	_lever.position = Vector3(x, 0.0, 0.0)
+	_lever.rotation = Vector3.ZERO
+	_lever.scale = Vector3.ONE * MACHINE_SCALE
+	_lever.set_mirrored(_left_handed)
+	_next_round.position = Vector3(x, 0.3, 0.0) # above the machine and its raised lever
+
+
+## "Next Round" as a big red button above the reroll machine: point at it and pull the trigger.
+func _build_next_round_button() -> void:
+	_next_round = Node3D.new()
+	_next_round.name = "NextRound"
+	_counter.add_child(_next_round)
+	var box := MeshInstance3D.new()
+	var b := BoxMesh.new()
+	b.size = Vector3(0.12, 0.05, 0.025)
+	box.mesh = b
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.9, 0.24, 0.2) # the game's red
+	m.emission_enabled = true
+	m.emission = Color(0.9, 0.24, 0.2) * 0.25
+	box.material_override = m
+	box.rotation_degrees.x = -15.0
+	_next_round.add_child(box)
+	var label := Label3D.new()
+	label.text = "NEXT\nROUND"
+	label.font_size = 40
+	label.pixel_size = 0.00045
+	label.outline_size = 0
+	label.line_spacing = -6
+	label.position = Vector3(0, 0.0, 0.0135)
+	box.add_child(label)
+	GameFont.apply_to(label)
+	var body := StaticBody3D.new()
+	body.set_meta("target_id", -50)
+	body.set_meta("kind", "nextround")
+	var shape := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = Vector3(0.12, 0.05, 0.03)
+	shape.shape = bs
+	body.add_child(shape)
+	box.add_child(body)
 
 
 ## The card stand on the joker board: a low block of dark polished wood with a groove, the tarot /
@@ -2912,6 +3013,7 @@ func _buzz_hand(hand: XRController3D, amplitude: float, seconds: float) -> void:
 func _apply_table_fun(state: Dictionary, in_run: bool) -> void:
 	var name := str(state.get("state_name", ""))
 	_play_stand.visible = _vr and in_run and ROUND_STATES.has(name)
+	_counter.visible = (_vr and in_run and bool(state.get("shop_open", false))) or _calibrating
 	_lever.set_shop(bool(state.get("shop_open", false)), bool(state.get("can_reroll", false)), int(state.get("reroll_cost", 0)))
 	_planets.visible = in_run
 	_planets.set_levels(state.get("hand_levels", []) if in_run else [])
@@ -3438,6 +3540,9 @@ func _grip_table(hand: XRController3D) -> bool:
 		return true
 	if _try_grab_consumable(hand):
 		return true
+	if _counter.try_grab(hand): # something off the shop counter
+		_buzz_hand(hand, 0.2, 0.03)
+		return true
 	return _try_grab_joker(hand)
 
 
@@ -3445,6 +3550,12 @@ func _release_table(hand: XRController3D) -> void:
 	if _pack != null and is_instance_valid(_pack):
 		_pack.release(hand)
 	_lever.release(hand)
+	if _counter.holds(hand):
+		match _counter.release(hand):
+			"bought": _buzz_hand(hand, 0.5, 0.08)
+			"poor": # not enough money: a hint, and it goes back onto the counter
+				_rack_hint(_counter, "Not enough money")
+				_buzz_hand(hand, 0.2, 0.05)
 	if _held_consumable >= 0 and _held_consumable_hand == hand:
 		_drop_consumable()
 	if _held_joker >= 0 and _held_hand == hand:
@@ -3469,6 +3580,7 @@ var _gloves: Array = []          # the two JimboHands (VR only)
 var _spectator: Spectator        # the spectator camera window (VR only)
 var _tutorial: VRTutorial        # Jimbo's tips
 var _wrist: WristMenu            # the VR settings above the card hand (menu button)
+var _first_hint: Label3D         # "First time? Check the Tips" until they were opened once
 var _standing := false           # standing mode: its own layout
 var _beat_time := 0.0
 var _last_chips := -1.0
@@ -3669,6 +3781,9 @@ func _fly_purchase(ev: Dictionary) -> void:
 	if uid < 0 or kind == "Booster": # packs: they float up to be torn open (pack_ready)
 		return
 	var v = _board._visuals.get(uid)
+	var from_counter: Node3D = _counter.item_node(uid) if _counter != null and _vr else null
+	if from_counter != null: # taken off the shop counter: it flies on from your hand
+		v = from_counter
 	if v == null or not is_instance_valid(v):
 		return
 	var item := {}
@@ -3683,6 +3798,9 @@ func _fly_purchase(ev: Dictionary) -> void:
 	CardArt.apply_layers(card.get_node("Face"), CardArt.card_layers(item), TABLE_CARD, 0.0003)
 	var from := Transform3D((v as Node3D).global_basis.orthonormalized(), (v as Node3D).global_position)
 	var s0 := float(item.get("w", 1.4)) * Board.SCALE / TABLE_CARD.x
+	if from_counter != null:
+		s0 = from_counter.scale.x
+		from_counter.visible = false
 	var to: Callable
 	var hide := Callable()
 	var arrive := Callable()

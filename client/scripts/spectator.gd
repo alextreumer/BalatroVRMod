@@ -14,6 +14,7 @@ extends Node
 enum Mode { OFF, EYES, TRIPOD, SHOULDER, OVERHEAD, ROOM }
 const NAMES := ["Off", "Eyes", "Tripod", "Shoulder", "Overhead", "Room"]
 const HAT_LAYER := 1 << 19         # render layer of the player's hat: hidden from the headset
+const PLAYER_LAYER := 1 << 18      # the LIVE badge and the camera model: hidden from the spectator window
 
 signal mode_changed(mode: int)
 
@@ -22,6 +23,7 @@ var head: Node3D                   # the XR camera
 var focus: Callable                # -> Vector3: what the shoulder / room views look at (the table)
 var place: Callable                # -> Transform3D: the player's place (origin) and facing (-Z), fixed in the room
 var overview: Callable             # -> Vector3: the middle of everything on the table (overhead view)
+var badge_hand: Callable           # -> Node3D: the hand that wears the LIVE badge (the card hand)
 
 var _win: Window
 var _cam: Camera3D
@@ -31,14 +33,22 @@ var _look := Vector3.ZERO
 var _basis := Basis()
 var _time := 0.0
 var _snap := true                  # jump to the target the first frame (no swoop from the origin)
+var last_view := Mode.EYES        # the view the window opens with
+var _badge: Label3D
+var _badge_pop := 0.0
+var _rig: Node3D                   # the film camera model
+var _tally: MeshInstance3D         # its red light
 
 
 func _ready() -> void:
 	_build_hat()
+	_build_feedback()
 
 
 func set_mode(m: int) -> void:
 	mode = clampi(m, 0, Mode.ROOM) as Mode
+	if mode != Mode.OFF:
+		last_view = mode
 	if mode == Mode.OFF:
 		if _win != null:
 			_win.queue_free()
@@ -48,11 +58,22 @@ func set_mode(m: int) -> void:
 		_open_window()
 	_snap = true
 	_hat.visible = mode == Mode.SHOULDER or mode == Mode.OVERHEAD or mode == Mode.ROOM
+	_update_feedback()
 	mode_changed.emit(mode)
 
 
 func next_mode() -> void:
 	set_mode((mode + 1) % NAMES.size())
+
+
+## For the VR menu: the window on / off (it comes back with the view it had) ...
+func toggle() -> void:
+	set_mode(Mode.OFF if mode != Mode.OFF else last_view)
+
+
+## ... and the next view without closing the window (OBS keeps capturing it).
+func next_view() -> void:
+	set_mode(Mode.EYES if mode == Mode.OFF or mode == Mode.ROOM else mode + 1)
 
 
 func _open_window() -> void:
@@ -73,6 +94,7 @@ func _open_window() -> void:
 	_cam = Camera3D.new()
 	_cam.fov = 70.0
 	_cam.near = 0.03
+	_cam.cull_mask &= ~PLAYER_LAYER # (the LIVE badge and the camera model are only for the headset)
 	_win.add_child(_cam)
 	_cam.current = true
 	var hint := Label.new()
@@ -106,6 +128,7 @@ func _process(delta: float) -> void:
 	# the hat sits on the player's head (seen only in the spectator window)
 	var yaw := _yaw_basis(head.global_basis)
 	_hat.global_transform = Transform3D(yaw.scaled(Vector3.ONE * 0.7), head.global_position + Vector3(0, 0.08, 0) + yaw.z * 0.02)
+	_process_feedback(delta)
 	if _cam == null:
 		return
 	var eyes := head.global_position
@@ -206,3 +229,82 @@ func _part(mesh: Mesh, colour: Color) -> MeshInstance3D:
 	mi.layers = HAT_LAYER
 	_hat.add_child(mi)
 	return mi
+
+
+# ---------------------------------------------------------------- feedback in the headset
+
+## What only the player sees (render layer 19, hidden from the spectator window): a "● LIVE · Tripod"
+## badge on the wrist while the window runs, and a little film camera with a red light where the
+## spectator camera is (not in the Eyes view: that one is your own head).
+func _build_feedback() -> void:
+	_badge = Label3D.new()
+	_badge.font_size = 32
+	_badge.pixel_size = 0.0006
+	_badge.outline_size = 8
+	_badge.outline_modulate = Color(0.1, 0.0, 0.0)
+	_badge.modulate = Color(1.0, 0.3, 0.25)
+	_badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_badge.layers = PLAYER_LAYER
+	_badge.visible = false
+	add_child(_badge)
+	_rig = Node3D.new()
+	_rig.visible = false
+	add_child(_rig)
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.08, 0.08, 0.09)
+	dark.roughness = 0.4
+	dark.metallic = 0.5
+	_rig_part(BoxMesh.new(), Vector3(0.09, 0.07, 0.13), Vector3(0, 0, 0.02), dark)                  # body
+	var lens := _rig_part(CylinderMesh.new(), Vector3(0.05, 0.05, 0.05), Vector3(0, 0, -0.07), dark) # lens
+	lens.rotation_degrees.x = 90.0
+	var glass := StandardMaterial3D.new()
+	glass.albedo_color = Color(0.2, 0.35, 0.6)
+	glass.metallic = 1.0
+	glass.roughness = 0.05
+	var front := _rig_part(CylinderMesh.new(), Vector3(0.04, 0.004, 0.04), Vector3(0, 0, -0.096), glass)
+	front.rotation_degrees.x = 90.0
+	var red := StandardMaterial3D.new()
+	red.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	red.albedo_color = Color(2.5, 0.15, 0.1)
+	_tally = _rig_part(SphereMesh.new(), Vector3(0.016, 0.016, 0.016), Vector3(0.028, 0.045, -0.02), red)
+
+
+func _rig_part(mesh: PrimitiveMesh, size: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:
+	if mesh is BoxMesh:
+		(mesh as BoxMesh).size = size
+	elif mesh is CylinderMesh:
+		(mesh as CylinderMesh).top_radius = size.x * 0.5
+		(mesh as CylinderMesh).bottom_radius = size.x * 0.5
+		(mesh as CylinderMesh).height = size.y
+	elif mesh is SphereMesh:
+		(mesh as SphereMesh).radius = size.x * 0.5
+		(mesh as SphereMesh).height = size.x
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.position = pos
+	mi.material_override = mat
+	mi.layers = PLAYER_LAYER
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_rig.add_child(mi)
+	return mi
+
+
+func _update_feedback() -> void:
+	var on := mode != Mode.OFF
+	_badge.text = "● LIVE · " + NAMES[mode]
+	_badge_pop = 1.0 # a little bigger for a moment: you just switched
+	_rig.visible = on and mode != Mode.EYES
+
+
+func _process_feedback(delta: float) -> void:
+	var hand: Node3D = badge_hand.call() if badge_hand.is_valid() else null
+	_badge.visible = mode != Mode.OFF and hand != null and hand.is_visible_in_tree()
+	_badge_pop = maxf(_badge_pop - delta * 0.7, 0.0)
+	if _badge.visible:
+		# above the wrist of the card hand, where a watch would be
+		_badge.global_position = hand.global_position + hand.global_basis * Vector3(0, 0.05, 0.07)
+		_badge.scale = Vector3.ONE * (1.0 + 1.2 * _badge_pop)
+		_badge.modulate.a = 0.75 + 0.25 * sin(_time * 4.0) # the red light blinks
+	if _rig.visible and _cam != null:
+		_rig.global_transform = _cam.global_transform
+		_tally.visible = fmod(_time, 1.0) < 0.6
