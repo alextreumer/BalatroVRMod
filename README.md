@@ -7,6 +7,6 @@ Play [Balatro](https://www.playbalatro.com/) in virtual reality. Balatro keeps r
 - `BalatroMod/` – the Balatro mod (Lovely + Steamodded)
 - `Docs/` – the protocol between mod and client, architecture notes
 
-Fan project, not affiliated with LocalThunk or Playstack. You need your own copy of Balatro: the client takes all card art, sounds and the font from your installed game at runtime – nothing of the game is included here.
+Godot project and Steamodded Lua file – **no game files from Balatro itself.** Fan project, not affiliated with LocalThunk or Playstack. You need your own copy of Balatro: the client takes all card art, sounds and the font from your installed game at runtime – nothing of the game is included here.
 
 By [Under the VRadar](https://www.youtube.com/@UnderTheVRadar).
