@@ -33,29 +33,26 @@ var _look := Vector3.ZERO
 var _basis := Basis()
 var _time := 0.0
 var _snap := true                  # jump to the target the first frame (no swoop from the origin)
-var last_view := Mode.EYES        # the view the window opens with
 var _badge: Label3D
 var _badge_pop := 0.0
 var _rig: Node3D                   # the film camera model
 var _tally: MeshInstance3D         # its red light
+var _black: ColorRect              # covers the window while the view is "Off"
 
 
 func _ready() -> void:
 	_build_hat()
 	_build_feedback()
+	# the window is opened once and then stays: OBS keeps finding it. "Off" just shows black.
+	_open_window()
 
 
 func set_mode(m: int) -> void:
 	mode = clampi(m, 0, Mode.ROOM) as Mode
-	if mode != Mode.OFF:
-		last_view = mode
-	if mode == Mode.OFF:
-		if _win != null:
-			_win.queue_free()
-			_win = null
-			_cam = null
-	elif _win == null:
-		_open_window()
+	if _cam != null:
+		_cam.current = mode != Mode.OFF
+	if _black != null:
+		_black.visible = mode == Mode.OFF
 	_snap = true
 	_hat.visible = mode == Mode.SHOULDER or mode == Mode.OVERHEAD or mode == Mode.ROOM
 	_update_feedback()
@@ -63,17 +60,7 @@ func set_mode(m: int) -> void:
 
 
 func next_mode() -> void:
-	set_mode((mode + 1) % NAMES.size())
-
-
-## For the VR menu: the window on / off (it comes back with the view it had) ...
-func toggle() -> void:
-	set_mode(Mode.OFF if mode != Mode.OFF else last_view)
-
-
-## ... and the next view without closing the window (OBS keeps capturing it).
-func next_view() -> void:
-	set_mode(Mode.EYES if mode == Mode.OFF or mode == Mode.ROOM else mode + 1)
+	set_mode((mode + 1) % NAMES.size()) # Off -> Eyes -> Tripod -> Shoulder -> Overhead -> Room -> Off
 
 
 func _open_window() -> void:
@@ -85,7 +72,7 @@ func _open_window() -> void:
 	_win.force_native = true # a real window on the desktop (OBS can capture it), not inside the game view
 	_win.transient = false
 	_win.unresizable = false
-	_win.close_requested.connect(func(): set_mode(Mode.OFF))
+	_win.close_requested.connect(func(): set_mode(Mode.OFF)) # closing the window only switches it to black
 	_win.window_input.connect(_on_window_input)
 	add_child(_win)
 	_win.popup_centered() # now it opens as its own window on the desktop
@@ -96,7 +83,14 @@ func _open_window() -> void:
 	_cam.near = 0.03
 	_cam.cull_mask &= ~PLAYER_LAYER # (the LIVE badge and the camera model are only for the headset)
 	_win.add_child(_cam)
-	_cam.current = true
+	# black while "Off": a full-window black panel over the camera
+	_black = ColorRect.new()
+	_black.color = Color(0, 0, 0)
+	_black.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_black.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win.add_child(_black)
+	_cam.current = mode != Mode.OFF
+	_black.visible = mode == Mode.OFF
 	var hint := Label.new()
 	hint.text = "1 Eyes · 2 Tripod · 3 Shoulder · 4 Overhead · 5 Room · F11 full screen"
 	hint.position = Vector2(12, 8)
@@ -245,6 +239,8 @@ func _build_feedback() -> void:
 	_badge.modulate = Color(1.0, 0.3, 0.25)
 	_badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_badge.layers = PLAYER_LAYER
+	_badge.no_depth_test = true # drawn over everything: Jimbo's glove never hides it
+	_badge.render_priority = 10
 	_badge.visible = false
 	add_child(_badge)
 	_rig = Node3D.new()
@@ -302,7 +298,7 @@ func _process_feedback(delta: float) -> void:
 	_badge_pop = maxf(_badge_pop - delta * 0.7, 0.0)
 	if _badge.visible:
 		# above the wrist of the card hand, where a watch would be
-		_badge.global_position = hand.global_position + hand.global_basis * Vector3(0, 0.05, 0.07)
+		_badge.global_position = hand.global_position + hand.global_basis * Vector3(0, 0.07, 0.1) # a bit clear of the glove's cuff
 		_badge.scale = Vector3.ONE * (1.0 + 1.2 * _badge_pop)
 		_badge.modulate.a = 0.75 + 0.25 * sin(_time * 4.0) # the red light blinks
 	if _rig.visible and _cam != null:

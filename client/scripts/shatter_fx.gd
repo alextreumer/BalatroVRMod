@@ -8,6 +8,13 @@ const GRAVITY := 1.6
 
 var _shards: Array[Dictionary] = []
 var _time := 0.0
+var _rest_y := INF                  # settle_at(): the shards stay on a table at this height (world)
+
+
+## Achievement reward "Glass Breaker": the shards fall onto the table and stay there (main.gd frees
+## them when the run ends) instead of fading away.
+func settle_at(table_y: float) -> void:
+	_rest_y = table_y
 
 
 ## Breaks a flat picture of `size` (its material(s) drawn on each shard) at `xform` (world).
@@ -76,6 +83,23 @@ func _build(layers: Array, size: Vector2, round: bool, power: float) -> void:
 		})
 
 
+func _settle(delta: float) -> void:
+	for s in _shards:
+		if s.get("rest", false):
+			continue
+		var n: Node3D = s["node"]
+		var v: Vector3 = s["vel"]
+		v += global_basis.inverse() * Vector3(0, -GRAVITY, 0) * delta
+		s["vel"] = v
+		n.position += v * delta
+		n.rotation += s["spin"] * delta
+		if n.global_position.y <= _rest_y: # down on the table: lying flat, glinting
+			var yaw := randf() * TAU
+			n.global_transform = Transform3D(Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, -PI * 0.5),
+				Vector3(n.global_position.x, _rest_y, n.global_position.z))
+			s["rest"] = true
+
+
 ## One shard: its outline in the card plane, UVs from the picture, both sides.
 func _piece_mesh(poly: PackedVector2Array, centre: Vector2, size: Vector2) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -92,6 +116,9 @@ func _piece_mesh(poly: PackedVector2Array, centre: Vector2, size: Vector2) -> Ar
 
 func _process(delta: float) -> void:
 	_time += delta
+	if _rest_y < INF:
+		_settle(delta)
+		return
 	var fade := clampf(1.0 - (_time - LIFE * 0.6) / (LIFE * 0.4), 0.0, 1.0)
 	for s in _shards:
 		var n: Node3D = s["node"]

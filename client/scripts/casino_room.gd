@@ -12,8 +12,13 @@ const ROOM_HALF := Vector2(5.0, 4.5)     # half width (x) / half depth (z) of th
 const ROOM_CENTER_Z := -1.0              # the player stands near the front, looking at -z
 const ROOM_HEIGHT := 3.4
 const WAINSCOT := 1.0                    # height of the wooden lower wall panels
-const TABLE_SIZE := Vector2(2.5, 1.35)   # oval card table: width (x) and depth (z)
-const TABLE_CENTER := Vector3(0.1, 0.0, 0.12) # in layout space, horizontal only (y = table height)
+const TABLE_SIZE := Vector2(2.0, 1.05)   # the card table's felt: width (x) and depth (z) ...
+const TABLE_CORNER := 0.38               # ... a rectangle with well rounded corners
+# in layout space, horizontal only (y = table height): its straight front edge right at the joker
+# board's front edge (layout z 0.775), so the board lies flush with it and nothing in front is hidden
+const TABLE_CENTER := Vector3(0.05, 0.0, 0.775 - 1.05 * 0.5)
+const RAIL_WIDTH := 0.045                # the padded rail round it: slim and low
+const RAIL_HEIGHT := 0.02
 
 const FELT := Color(0.05, 0.32, 0.2)
 const LEATHER := Color(0.08, 0.03, 0.03)
@@ -75,12 +80,18 @@ var _hall_fame: Array[Label3D] = []        # [names, values]
 var _hall_shame: Array[Label3D] = []
 var _last_stats := {}
 var _chip_mountain: ChipMountain
-var _chip_mountain_2: ChipMountain # beyond 10 million
+var _chip_mountain_2: ChipMountain # beyond 2 million
 var _sconces: Array[Node3D] = []
 var _run_chips := 0.0
 var _wood: StandardMaterial3D
 var _gold: StandardMaterial3D
 var _felt: StandardMaterial3D
+var _vip: Label3D
+var _summit_flag := false
+var _vradar_sign: Label3D
+var _live: Label3D
+var _star_sky: MultiMeshInstance3D
+var _endless: Label3D
 var _leather: StandardMaterial3D
 
 
@@ -313,21 +324,30 @@ func _process(delta: float) -> void:
 
 
 ## Put the card table under the layout (shop, jokers): turned with it, top at `table_y`.
+## The whole room (floor, walls, machines) up or down by this much: when the tracked floor of the
+## headset doesn't match the real one (you seem to float or sink). The card table keeps its height.
+var floor_y := 0.0
+func set_floor(y: float) -> void:
+	floor_y = y
+	position.y = y
+
+
 func place_table(layout: Transform3D, table_y: float) -> void:
 	var yaw := Basis(Vector3.UP, layout.basis.get_euler().y)
 	var origin := layout.origin + yaw * TABLE_CENTER
 	origin.y = table_y
 	_table.global_transform = Transform3D(yaw, origin)
-	_table_base.global_position = Vector3(origin.x, 0.0, origin.z)
+	_table_base.global_position = Vector3(origin.x, floor_y, origin.z)
 	_table_base.global_basis = yaw
 	if _chip_mountain == null: # built once the table height is known (it reaches up to the ceiling)
 		_chip_mountain = ChipMountain.new()
-		_chip_mountain.ceiling = ROOM_HEIGHT - table_y - 0.05
+		_chip_mountain.ceiling = ROOM_HEIGHT + floor_y - table_y - 0.05
 		_chip_mountain.label_until = pow(10.0, ChipMountain.LOG_TO) # the second one counts on from there
 		_chip_mountain.position = CHIP_MOUNTAIN_POS - TABLE_CENTER
 		_table.add_child(_chip_mountain)
 		_chip_mountain.set_total(_run_chips)
-		# the first mountain reaches the ceiling at 10 million: then a second one wakes up on the
+		_chip_mountain.flag = _summit_flag
+		# the first mountain reaches the ceiling at 2 million: then a second one wakes up on the
 		# other end of the table and grows on up to a trillion
 		_chip_mountain_2 = ChipMountain.new()
 		_chip_mountain_2.ceiling = _chip_mountain.ceiling
@@ -336,11 +356,90 @@ func place_table(layout: Transform3D, table_y: float) -> void:
 		_chip_mountain_2.position = CHIP_MOUNTAIN_2_POS - TABLE_CENTER
 		_table.add_child(_chip_mountain_2)
 		_chip_mountain_2.set_total(_run_chips)
-	_chip_mountain.ceiling = ROOM_HEIGHT - table_y - 0.05
+		_chip_mountain_2.flag = _summit_flag
+	_chip_mountain.ceiling = ROOM_HEIGHT + floor_y - table_y - 0.05
 	_chip_mountain_2.ceiling = _chip_mountain.ceiling
 
 
 ## Every chip scored in this run: the chip mountain on the left of the table.
+## Achievement rewards "Streamer" and "Endless": neon signs on the right wall.
+func set_reward_signs(live: bool, endless: bool) -> void:
+	if live and _live == null:
+		_live = _neon("LIVE", Vector3(ROOM_HALF.x - 0.05, 2.72, ROOM_CENTER_Z - 1.85), -90.0, Color(3.6, 0.35, 0.35), 0.004) # between the wheel and the Spectral Lounge
+	if _live != null:
+		_live.visible = live
+	if endless and _endless == null:
+		_endless = _neon("ENDLESS", Vector3(ROOM_HALF.x - 0.05, 2.36, ROOM_CENTER_Z - 1.85), -90.0, Color(0.6, 1.2, 3.6), 0.003) # under LIVE
+	if _endless != null:
+		_endless.visible = endless
+
+
+## Achievement reward "Stargazer": a sky of small, softly twinkling stars on the ceiling.
+func set_star_ceiling(on: bool) -> void:
+	if on and _star_sky == null:
+		_star_sky = MultiMeshInstance3D.new()
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		var dot := QuadMesh.new()
+		dot.size = Vector2(0.024, 0.024)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.vertex_color_use_as_albedo = true
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_texture = _star_dot()
+		dot.material = mat
+		mm.mesh = dot
+		mm.instance_count = 500
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 42
+		for i in mm.instance_count: # facing down, just under the ceiling
+			var p := Vector3(rng.randf_range(-ROOM_HALF.x, ROOM_HALF.x), ROOM_HEIGHT - 0.03, ROOM_CENTER_Z + rng.randf_range(-ROOM_HALF.y, ROOM_HALF.y))
+			var size := rng.randf_range(0.5, 1.6)
+			mm.set_instance_transform(i, Transform3D(Basis(Vector3.RIGHT, PI * 0.5).scaled(Vector3.ONE * size), p))
+			var warm := rng.randf()
+			mm.set_instance_color(i, Color(1.6, 1.4 + warm * 0.2, 1.1 + (1.0 - warm) * 0.6, rng.randf_range(0.5, 1.0)))
+		_star_sky.multimesh = mm
+		_star_sky.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_star_sky)
+	if _star_sky != null:
+		_star_sky.visible = on
+
+
+func _star_dot() -> ImageTexture:
+	var n := 32
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for y in n:
+		for x in n:
+			var d := Vector2(x - n * 0.5 + 0.5, y - n * 0.5 + 0.5).length() / (n * 0.5)
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a))
+	return ImageTexture.create_from_image(img)
+
+
+## Achievement reward "UnderTheVRadar": the neon sign on the left wall shows your profile name
+## instead ("" = the normal UNDER THE VRADAR).
+func set_wall_name(name: String) -> void:
+	if _vradar_sign != null:
+		_vradar_sign.text = name.to_upper() if name != "" else "UNDER THE VRADAR"
+		_vradar_sign.pixel_size = 0.0028 * clampf(16.0 / maxf(_vradar_sign.text.length(), 1), 1.0, 1.8) # (a short name: bigger)
+
+
+## Achievement reward "Mountain Climber": a flag on the chip mountain's summit.
+func set_summit_flag(on: bool) -> void:
+	_summit_flag = on
+	if _chip_mountain != null and _chip_mountain.is_inside_tree():
+		_chip_mountain.flag = on
+		_chip_mountain_2.flag = on
+
+
+## Solatro has no run chips: the chip mountains are put away meanwhile.
+func set_mountains_visible(on: bool) -> void:
+	if _chip_mountain != null:
+		_chip_mountain.visible = on
+		_chip_mountain_2.visible = on
+
+
 func set_run_chips(total: float) -> void:
 	_run_chips = total
 	if _chip_mountain != null:
@@ -661,21 +760,16 @@ func _build_card_table() -> void:
 	_table = Node3D.new()
 	_table.name = "CardTable"
 	add_child(_table)
-	var oval := Vector3(TABLE_SIZE.x, 1.0, TABLE_SIZE.y)
 	# felt top: its surface lies just below the table height, so shop and jokers sit on it
-	var felt := _cyl(_table, 0.49, 0.49, 0.03, Vector3(0, -0.017, 0), _felt, 64)
-	felt.scale = oval
-	# printed gold line on the felt
-	var line := _torus(_table, 0.395, 0.405, Vector3(0, -0.0015, 0), _gold)
-	line.scale = Vector3(TABLE_SIZE.x, 0.05, TABLE_SIZE.y)
-	# padded leather rail around the edge
-	var rail := _torus(_table, 0.465, 0.53, Vector3(0, 0.0, 0), _leather)
-	rail.scale = Vector3(TABLE_SIZE.x, 0.9, TABLE_SIZE.y)
-	# wooden apron, gold trim, and a strong central leg
-	var apron := _cyl(_table, 0.5, 0.47, 0.12, Vector3(0, -0.09, 0), _wood, 64)
-	apron.scale = oval
-	var trim := _torus(_table, 0.49, 0.505, Vector3(0, -0.15, 0), _neon_mat(NEON_CYAN, 0.8)) # neon under-glow
-	trim.scale = Vector3(TABLE_SIZE.x, 0.4, TABLE_SIZE.y)
+	var felt_edge := _table_outline(0.0)
+	_slab(_table, felt_edge, -0.032, -0.002, _felt)
+	# printed gold line on the felt, a hand's width inside the edge
+	_ring(_table, _table_outline(0.09), _table_outline(0.1), -0.002, -0.0015, _gold)
+	# a slim padded leather rail round the edge (not a thick cushion), the felt's edge flush inside it
+	_ring(_table, _table_outline(-RAIL_WIDTH), felt_edge, -0.032, RAIL_HEIGHT, _leather)
+	# wooden apron, neon under-glow, and a strong central leg
+	_slab(_table, _table_outline(-RAIL_WIDTH + 0.004), -0.15, -0.032, _wood)
+	_ring(_table, _table_outline(-RAIL_WIDTH - 0.004), _table_outline(-RAIL_WIDTH + 0.008), -0.156, -0.146, _neon_mat(NEON_CYAN, 0.8))
 	_cyl(_table, 0.14, 0.1, 1.2, Vector3(0, -0.75, 0), _wood) # long enough for any table height; the floor hides the rest
 	_table_base = Node3D.new()
 	add_child(_table_base)
@@ -738,8 +832,12 @@ func _build_back_wall_show() -> void:
 	screen.position = Vector3(0, centre_y, z + 0.095)
 	screen.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(screen)
-	_neon("BALATRO", Vector3(0, 2.95, z + 0.12), 0.0, Color(3.6, 0.5, 0.6), 0.006)
-	_neon("UNDER THE VRADAR", Vector3(-ROOM_HALF.x + 0.05, 2.55, ROOM_CENTER_Z + 0.1), 90.0, NEON_CYAN, 0.0028) # between the window and LATE NIGHT
+	# BALATRO in red with "in VR" in cyan beside it, the two together centred above the screen
+	var title := _neon("BALATRO", Vector3(0.42, 2.95, z + 0.12), 0.0, Color(3.6, 0.5, 0.6), 0.006)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var in_vr := _neon("in VR", Vector3(0.58, 2.95, z + 0.12), 0.0, NEON_CYAN, 0.0045)
+	in_vr.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_vradar_sign = _neon("UNDER THE VRADAR", Vector3(-ROOM_HALF.x + 0.05, 2.55, ROOM_CENTER_Z + 0.1), 90.0, NEON_CYAN, 0.0028) # between the window and LATE NIGHT
 	# on the right wall, out of the way of the Spectral Lounge's arch; this one has the loose contact
 	_flicker_colour = NEON_PINK
 	_flicker = _neon("OPEN 24/7", Vector3(ROOM_HALF.x - 0.05, 2.6, ROOM_CENTER_Z + 2.6), -90.0, _flicker_colour, 0.0022)
@@ -1047,7 +1145,7 @@ func _build_kids_door() -> void:
 	two.modulate = Color(0.8, 0.1, 0.15)
 	two.position = Vector3(0, h * 0.32, 0.097)
 	d.add_child(two)
-	# colourful sign above it and a "you must be this small" line beside it
+	# colourful sign above it
 	var colours := [NEON_PINK, Color(3.2, 2.6, 0.4), NEON_CYAN]
 	var words := ["WEE", "JOKER", "KIDS CORNER"]
 	var spots := [[Vector3(-0.1, 1.22, 0.06), HORIZONTAL_ALIGNMENT_RIGHT], [Vector3(-0.05, 1.22, 0.06), HORIZONTAL_ALIGNMENT_LEFT],
@@ -1057,15 +1155,6 @@ func _build_kids_door() -> void:
 		l.reparent(d, false)
 		l.position = spots[i][0]
 		l.horizontal_alignment = spots[i][1]
-	_box(d, Vector3(0.22, 0.012, 0.012), Vector3(w * 0.5 + 0.2, h + 0.02, 0.06), _gold)
-	var small := Label3D.new()
-	small.text = "You must be\nthis small\nto enter"
-	small.font_size = 32
-	small.pixel_size = 0.0009
-	small.outline_size = 0
-	small.modulate = Color(1, 0.95, 0.8)
-	small.position = Vector3(w * 0.5 + 0.2, h + 0.1, 0.06)
-	d.add_child(small)
 
 
 ## On the wall in front of you, left and right of the big screen: the Hall of Fame (your best
@@ -1206,6 +1295,89 @@ func _box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material) -> MeshIns
 	var mesh := BoxMesh.new()
 	mesh.size = size
 	return _add(parent, mesh, pos, mat)
+
+
+## The table's outline (x, z), going round once: a rectangle with rounded corners, `inset` inside its
+## edge (negative: outside it). The same number of points for every inset, so outlines can be joined.
+func _table_outline(inset: float, seg := 14) -> PackedVector2Array:
+	var hw := TABLE_SIZE.x * 0.5 - inset
+	var hd := TABLE_SIZE.y * 0.5 - inset
+	var r := maxf(TABLE_CORNER - inset, 0.01)
+	var pts := PackedVector2Array()
+	for corner in [[1.0, 1.0, 0.0], [-1.0, 1.0, 90.0], [-1.0, -1.0, 180.0], [1.0, -1.0, 270.0]]:
+		var c := Vector2(corner[0] * (hw - r), corner[1] * (hd - r))
+		for i in seg + 1:
+			var a := deg_to_rad(corner[2] + 90.0 * i / seg)
+			pts.append(c + Vector2(cos(a), sin(a)) * r)
+	return pts
+
+
+## A triangle that faces along n (whichever way round its corners were given).
+func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, n: Vector3) -> void:
+	if (b - a).cross(c - a).dot(n) > 0.0: # (Godot's front faces wind clockwise)
+		var t := b
+		b = c
+		c = t
+	for v in [a, b, c]:
+		st.set_normal(n)
+		st.add_vertex(v)
+
+
+## A flat piece in the outline's shape: its top at y1, its sides down to y0.
+func _slab(parent: Node3D, outline: PackedVector2Array, y0: float, y1: float, mat: Material) -> MeshInstance3D:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var idx := Geometry2D.triangulate_polygon(outline)
+	for k in range(0, idx.size(), 3):
+		var p := [outline[idx[k]], outline[idx[k + 1]], outline[idx[k + 2]]]
+		_tri(st, Vector3(p[0].x, y1, p[0].y), Vector3(p[1].x, y1, p[1].y), Vector3(p[2].x, y1, p[2].y), Vector3.UP)
+	_outline_side(st, outline, y0, y1, 1.0)
+	return _mesh_of(parent, st, mat)
+
+
+## A band between two outlines (outer, inner): its top at y1, both walls down to y0.
+func _ring(parent: Node3D, outer: PackedVector2Array, inner: PackedVector2Array, y0: float, y1: float, mat: Material) -> MeshInstance3D:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := outer.size()
+	for i in n:
+		var j := (i + 1) % n
+		var a := Vector3(outer[i].x, y1, outer[i].y)
+		var b := Vector3(outer[j].x, y1, outer[j].y)
+		var c := Vector3(inner[j].x, y1, inner[j].y)
+		var d := Vector3(inner[i].x, y1, inner[i].y)
+		_tri(st, a, b, c, Vector3.UP)
+		_tri(st, a, c, d, Vector3.UP)
+	_outline_side(st, outer, y0, y1, 1.0)
+	_outline_side(st, inner, y0, y1, -1.0)
+	return _mesh_of(parent, st, mat)
+
+
+## The upright side along an outline (out = 1: facing outwards, -1: inwards).
+func _outline_side(st: SurfaceTool, outline: PackedVector2Array, y0: float, y1: float, out: float) -> void:
+	var n := outline.size()
+	var centre := Vector2.ZERO
+	for p in outline:
+		centre += p
+	centre /= n
+	for i in n:
+		var a: Vector2 = outline[i]
+		var b: Vector2 = outline[(i + 1) % n]
+		var dir := (b - a).normalized()
+		var nrm := Vector3(dir.y, 0, -dir.x)
+		if Vector2(nrm.x, nrm.z).dot((a + b) * 0.5 - centre) * out < 0.0:
+			nrm = -nrm
+		var p := [Vector3(a.x, y1, a.y), Vector3(b.x, y1, b.y), Vector3(b.x, y0, b.y), Vector3(a.x, y0, a.y)]
+		_tri(st, p[0], p[1], p[2], nrm)
+		_tri(st, p[0], p[2], p[3], nrm)
+
+
+func _mesh_of(parent: Node3D, st: SurfaceTool, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
 
 
 func _cyl(parent: Node3D, top: float, bottom: float, height: float, pos: Vector3, mat: Material, segments := 24) -> MeshInstance3D:
@@ -1351,7 +1523,21 @@ func _wood_texture() -> ImageTexture:
 
 
 ## Green felt with a fine fuzz.
-func _felt_texture() -> ImageTexture:
+## Achievement rewards: another colour for the table's felt (FELT = the green one); with a second
+## colour it is striped (TechDweeb's orange and black).
+func set_felt(colour: Color, stripe := Color(0, 0, 0, 0)) -> void:
+	_felt.albedo_texture = _felt_texture(colour, stripe)
+
+
+## Achievement reward "Welcome to the Casino": a VIP neon sign on the left wall.
+func set_vip(on: bool) -> void:
+	if on and _vip == null:
+		_vip = _neon("VIP", Vector3(-ROOM_HALF.x + 0.05, 2.08, ROOM_CENTER_Z + 0.35), 90.0, Color(3.2, 2.4, 0.6), 0.0055)
+	if _vip != null:
+		_vip.visible = on
+
+
+func _felt_texture(base := FELT, stripe := Color(0, 0, 0, 0)) -> ImageTexture:
 	var noise := FastNoiseLite.new()
 	noise.seed = 9
 	noise.frequency = 0.25
@@ -1360,7 +1546,8 @@ func _felt_texture() -> ImageTexture:
 	for y in n:
 		for x in n:
 			var k := 1.0 + noise.get_noise_2d(x, y) * 0.12
-			img.set_pixel(x, y, Color(FELT.r * k, FELT.g * k, FELT.b * k))
+			var c := stripe if stripe.a > 0.0 and (y / 16) % 2 == 1 else base
+			img.set_pixel(x, y, Color(c.r * k, c.g * k, c.b * k))
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 

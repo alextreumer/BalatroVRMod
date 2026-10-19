@@ -118,6 +118,80 @@ var _time := 0.0
 
 
 ## [{"name": "Flush", "level": 3}, ...] from the game state (hands above level 1).
+## "Planet Hopper" reward: every planet draws a glowing trail behind it.
+var trails := false
+
+
+func set_trails(on: bool) -> void:
+	trails = on
+	for p in _planets.values():
+		_trail(p)
+
+
+func _trail(p: Dictionary) -> void:
+	var node: Node3D = p["node"]
+	var t := node.get_node_or_null("Trail") as CPUParticles3D
+	if t == null and trails:
+		t = CPUParticles3D.new()
+		t.name = "Trail"
+		t.amount = 60
+		t.lifetime = 2.5
+		t.local_coords = false # (left behind in the room while the planet moves on)
+		t.gravity = Vector3.ZERO
+		t.initial_velocity_min = 0.0
+		t.initial_velocity_max = 0.01
+		t.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		t.emission_sphere_radius = 0.04
+		var dot := SphereMesh.new()
+		dot.radius = 0.012
+		dot.height = 0.024
+		var glow := StandardMaterial3D.new()
+		glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		glow.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		glow.vertex_color_use_as_albedo = true
+		dot.material = glow
+		t.mesh = dot
+		var ramp := Gradient.new()
+		var info: Array = PLANETS.get(str(p.get("hand", "")), ["", 0, [Color(0.8, 0.8, 1.0)]])
+		var c: Color = (info[2] as Array)[0]
+		ramp.set_color(0, Color(c.r * 2.0, c.g * 2.0, c.b * 2.0, 0.9))
+		ramp.set_color(1, Color(c.r, c.g, c.b, 0.0))
+		t.color_ramp = ramp
+		t.scale_amount_min = 0.4
+		t.scale_amount_max = 1.0
+		node.add_child(t)
+	if t != null:
+		t.emitting = trails
+
+
+## The Flint halves chips and mult of every hand: the planets sink low meanwhile (half their height
+## and another half metre).
+const HALVED_DROP := 0.5
+var halved := false
+var _height_k := 1.0
+## The Arm takes a level off the played hand: the planets sink meanwhile, down to just above your
+## eyes (they circle 1.1 m above them otherwise: centre 0.2 m over the head + ORBIT_HEIGHT).
+const ARM_DROP := 1.05
+var arm := false
+var _arm_k := 0.0
+
+
+func set_arm(on: bool) -> void:
+	arm = on
+
+
+func set_halved(on: bool) -> void:
+	if on == halved:
+		return
+	halved = on
+	for p in _planets.values():
+		(p["label"] as Label3D).text = _label_text(str(p.get("name", "")), int(p["level"]))
+
+
+func _label_text(name: String, level: int) -> String:
+	return "%s  Lv.%d%s" % [name, level, "  (halved)" if halved else ""]
+
+
 func set_levels(levels: Array) -> void:
 	var alive := {}
 	for h in levels:
@@ -127,11 +201,14 @@ func set_levels(levels: Array) -> void:
 		var p: Dictionary = _planets.get(name, {})
 		if p.is_empty():
 			p = _make_planet(name)
+			p["hand"] = name
 			_planets[name] = p
+			_trail(p)
 		if int(p["level"]) != level:
 			p["level"] = level
 			p["grow"] = 0.0 # pop when it levels up
-			(p["label"] as Label3D).text = "%s  Lv.%d" % [name, level]
+			p["name"] = name
+			(p["label"] as Label3D).text = _label_text(name, level)
 	for name in _planets.keys():
 		if not alive.has(name):
 			(_planets[name]["node"] as Node3D).queue_free()
@@ -205,6 +282,8 @@ func _make_planet(hand: String) -> Dictionary:
 
 func _process(delta: float) -> void:
 	_time += delta
+	_height_k = move_toward(_height_k, 0.5 if halved else 1.0, delta * 0.4)
+	_arm_k = move_toward(_arm_k, 1.0 if arm else 0.0, delta * 0.4)
 	for p in _planets.values():
 		var size := planet_size(int(p["level"]))
 		p["grow"] = minf(float(p["grow"]) + delta * 1.5, 1.0)
@@ -218,5 +297,5 @@ func _process(delta: float) -> void:
 		p["at"] = lerp_angle(float(p.get("at", slot)), slot, 1.0 - exp(-0.8 * delta))
 		var a: float = p["at"] + _time * SPEED # all planets circle the room together, keeping their distance
 		var node: Node3D = p["node"]
-		node.position = Vector3(cos(a) * ORBIT_RADIUS, ORBIT_HEIGHT + 0.1 * sin(_time * 0.3 + slot * 3.0), sin(a) * ORBIT_RADIUS)
+		node.position = Vector3(cos(a) * ORBIT_RADIUS, lerpf(ORBIT_HEIGHT * 0.5 - HALVED_DROP, ORBIT_HEIGHT, (_height_k - 0.5) * 2.0) - ARM_DROP * _arm_k + 0.1 * sin(_time * 0.3 + slot * 3.0), sin(a) * ORBIT_RADIUS)
 		(p["label"] as Label3D).position = Vector3(0, -size * 0.5 - 0.1, 0)

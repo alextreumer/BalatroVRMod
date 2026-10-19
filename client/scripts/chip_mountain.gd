@@ -2,9 +2,9 @@ class_name ChipMountain
 extends Node3D
 ## A mountain of poker chips on the casino table: every chip scored in this run, added up.
 ## It starts as a little stack (a few hundred points) and grows with the run's score – the scale
-## is logarithmic, so about 10 million points reach the ceiling. The colour of the chips changes
+## is logarithmic, so about 2 million points reach the ceiling. The colour of the chips changes
 ## with each power of ten (white hundreds, red thousands, blue ten-thousands, green hundred-thousands,
-## black millions, purple ten millions, gold beyond). Beyond 10 million a second mountain (log_from / log_to) grows on.
+## black millions, purple ten millions, gold beyond). Beyond 2 million a second mountain (log_from / log_to) grows on.
 ##
 ## Thousands of chips are drawn with one MultiMesh. Every chip slot is prepared once, sorted by the
 ## mountain height at which it appears, so growing only means showing more of them.
@@ -16,11 +16,11 @@ const BASE_RADIUS := 0.05       # foot of the mountain when it is tiny ...
 const SPREAD := 0.105          # ... and how much wider it gets per metre of height
 const MAX_HEIGHT := 2.8
 const LOG_FROM := 2.0           # 100 points: the very first chip
-const LOG_TO := 7.0             # 10 million points: up to the ceiling
+const LOG_TO := 6.30103         # 2 million points (log10 of 2,000,000): up to the ceiling
 const CURVE := 1.6              # small scores stay small, then it takes off
 const BANDS := [Color(0.92, 0.92, 0.9), Color(0.85, 0.12, 0.12), Color(0.15, 0.35, 0.9),
 		Color(0.1, 0.6, 0.25), Color(0.08, 0.08, 0.09), Color(0.55, 0.2, 0.75), Color(0.95, 0.75, 0.2),
-		# (the second mountain, beyond 10 million: orange, cyan, pink, silver)
+		# (the second mountain, beyond 2 million: orange, cyan, pink, silver)
 		Color(1.0, 0.45, 0.1), Color(0.2, 0.85, 0.9), Color(1.0, 0.4, 0.7), Color(0.85, 0.88, 0.95)]
 
 var ceiling := MAX_HEIGHT       # local height of the room's ceiling (set by the casino)
@@ -47,6 +47,14 @@ func _ready() -> void:
 
 
 ## The run's total score; 0 outside a run (the mountain is cleared away).
+## Achievement reward "Mountain Climber": a little flag on the summit.
+var flag := false:
+	set(on):
+		flag = on
+		_update_view()
+var _flag: Node3D
+
+
 func set_total(total: float) -> void:
 	_target = maxf(total, 0.0)
 	if _target < _shown * 0.5: # a new run: start again from nothing
@@ -76,6 +84,38 @@ func _process(delta: float) -> void:
 
 func _update_view() -> void:
 	var h := height_for(_shown)
+	if flag and _flag == null:
+		_flag = Node3D.new()
+		add_child(_flag)
+		var pole := MeshInstance3D.new()
+		var pm := CylinderMesh.new()
+		pm.top_radius = 0.0025
+		pm.bottom_radius = 0.0025
+		pm.height = 0.14
+		pole.mesh = pm
+		pole.position.y = 0.07
+		var grey := StandardMaterial3D.new()
+		grey.albedo_color = Color(0.8, 0.8, 0.85)
+		grey.metallic = 0.8
+		pole.material_override = grey
+		_flag.add_child(pole)
+		var cloth := MeshInstance3D.new()
+		var cm := PrismMesh.new()
+		cm.size = Vector3(0.06, 0.045, 0.002)
+		cloth.mesh = cm
+		cloth.rotation_degrees.z = -90.0
+		cloth.position = Vector3(0.025, 0.12, 0)
+		var red := StandardMaterial3D.new()
+		red.albedo_color = Color(0.95, 0.15, 0.15)
+		red.emission_enabled = true
+		red.emission = Color(0.9, 0.1, 0.1)
+		red.emission_energy_multiplier = 0.3
+		cloth.material_override = red
+		_flag.add_child(cloth)
+	if _flag != null:
+		# on the summit that is still growing: a mountain at the ceiling has its flag hidden up there
+		_flag.visible = flag and h > CHIP_HEIGHT and h < minf(ceiling, MAX_HEIGHT) - 0.05
+		_flag.position.y = h
 	# binary search: how many chip slots appear at this height
 	var lo := 0
 	var hi := _thresholds.size()

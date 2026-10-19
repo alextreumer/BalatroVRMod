@@ -36,15 +36,17 @@ local VR = {
     queue = {},                -- gated commands waiting for the game to accept input
     sent_atlas = {},           -- texture atlases already sent over the current connection
     last_error = nil,
+    floor = { cm = 0 },        -- the casino floor height the VR client uses (slider in VR Settings)
 }
 BalatroVR = VR -- global for debugging from the Lovely console
 
 local function log(msg) print("[BalatroVR] " .. msg) end
 
--- Test helper for trying out jokers: F8 (keyboard) or "Test: +$100" in the Options menu gives
--- money during a run. Set to false before sharing the mod.
+-- Test helper for trying out jokers: F8 (keyboard) or "Test: +$10000" in the Options menu gives
+-- money during a run; F9 or "Test: Extreme" gives more hand size and joker / consumable slots.
+-- Set to false before sharing the mod.
 local TEST_MONEY = false
-local TEST_MONEY_AMOUNT = 100
+local TEST_MONEY_AMOUNT = 10000
 
 ----------------------------------------------------------------------------
 -- Minimal JSON encoder (arrays are marked explicitly so empty lists stay [])
@@ -309,6 +311,16 @@ end
 -- without that shader it is just a raw icon. Send the flame strength instead (only while burning).
 local FLAMES = { flame_chips = "chip_flames", flame_mult = "mult_flames" }
 
+-- Where a sprite sits in its atlas: Sprite keeps it in sprite_pos, AnimatedSprite (blind chips,
+-- also as card faces in the Blinds collection) in animation.x / .y
+local function sprite_xy(s)
+    if type(s) ~= "table" then return nil end
+    local p = s.sprite_pos
+    if not (type(p) == "table" and p.x and p.y) then p = s.animation end
+    if type(p) == "table" and p.x and p.y then return p end
+    return nil
+end
+
 local function emit_object(obj, holder)
     -- hidden objects stay hidden: e.g. the tick of an unchecked toggle is a sprite with visible = false
     if type(obj) == "table" and obj.states and obj.states.visible == false then return end
@@ -349,8 +361,9 @@ local function emit_object(obj, holder)
             if next(fx) then item.fx = fx end
             if put_rect(item, obj.VT and obj or holder) then add(item) end
         end
-    elseif type(obj) == "table" and obj.atlas and obj.sprite_pos then -- Sprite / AnimatedSprite
-        local item = { k = "s", id = oid(obj), a = obj.atlas.name or "", p = arr({ num(obj.sprite_pos.x), num(obj.sprite_pos.y) }) }
+    elseif type(obj) == "table" and obj.atlas and sprite_xy(obj) then -- Sprite / AnimatedSprite
+        local xy = sprite_xy(obj)
+        local item = { k = "s", id = oid(obj), a = obj.atlas.name or "", p = arr({ num(xy.x), num(xy.y) }) }
         -- a sprite with its own tooltip (tags: the skip reward on the blind select, the run panel's
         -- tags): VR may point at it and "hover" it like a card
         if rawget(obj, "hover") and obj.states and obj.states.hover and obj.states.hover.can then item.hv = true end
@@ -385,10 +398,12 @@ local function emit_node(e)
         else
             local c = cfg.colour
             local visible = type(c) == "table" and (c[4] or 1) > 0.01
-            if visible or click then
+            local slider = cfg.func == "slider" -- the track of a slider (volume ...): VR drags it with the beam
+            if visible or click or slider then
                 local item = { k = "r", id = oid(e) }
                 if visible then item.c = col(c) end
-                if click then item.b = true end
+                if click or slider then item.b = true end
+                if slider then item.sl = true end
                 if cfg.r then item.rr = true end
                 if cfg.outline and cfg.outline_colour and (cfg.outline_colour[4] or 1) > 0.01 then item.oc = col(cfg.outline_colour) end
                 if cfg.progress_bar and cfg.progress_bar.ref_table then
@@ -422,6 +437,29 @@ emit_box = function(box)
     if box.children and is_a(box.children.alert, UIBox) then emit_box(box.children.alert) end
 end
 
+-- The stickers a card wears (Eternal, Perishable, Rental, stake stickers, mod stickers, the seal),
+-- each a sprite {a = atlas, p = {x, y}}. Used for the cards in the scene and for the 3D jokers.
+local function card_stickers(card)
+    local a = card.ability or {}
+    local ov = arr()
+    local function overlay(sprite)
+        local xy = sprite_xy(sprite)
+        if sprite and sprite.atlas and sprite.atlas.name and xy then
+            ov[#ov + 1] = { a = sprite.atlas.name, p = arr({ num(xy.x), num(xy.y) }) }
+        end
+    end
+    if card.seal and G.shared_seals then overlay(G.shared_seals[card.seal]) end
+    if a.eternal then overlay(G.shared_sticker_eternal or (G.shared_stickers and G.shared_stickers.eternal)) end
+    if a.perishable then overlay(G.shared_sticker_perishable or (G.shared_stickers and G.shared_stickers.perishable)) end
+    if a.rental then overlay(G.shared_sticker_rental or (G.shared_stickers and G.shared_stickers.rental)) end
+    for key, sprite in pairs(G.shared_stickers or {}) do -- stickers added by mods keep their flag in ability
+        if a[key] == true and key ~= "eternal" and key ~= "perishable" and key ~= "rental" then overlay(sprite) end
+    end
+    local stake_sticker = card.sticker or (G.SETTINGS and G.SETTINGS.run_stake_stickers and card.sticker_run)
+    if stake_sticker and stake_sticker ~= "NONE" and G.shared_stickers then overlay(G.shared_stickers[stake_sticker]) end
+    return ov
+end
+
 emit_card = function(card, area_name)
     if SCN.emitted[card] then return end
     SCN.emitted[card] = true
@@ -447,37 +485,36 @@ emit_card = function(card, area_name)
     end
     if card.cost then item.cost = num(card.cost) end
     if card.sell_cost then item.sell = num(card.sell_cost) end
+    -- a tarot / planet / spectral card for sale that could be used right now: VR offers "buy and use"
+    if area_name == "shop_jokers" and a.consumeable then
+        local ok, usable = pcall(function() return card:can_use_consumeable() end)
+        if ok and usable then item.cu = true end
+    end
     local ch = card.children or {}
-    if ch.center and ch.center.atlas then
+    -- (a sprite without a position - seen in some menus - is skipped; it used to break the whole
+    -- scene, so a newly opened window never reached VR)
+    local center_xy, front_xy, back_xy = sprite_xy(ch.center), sprite_xy(ch.front), sprite_xy(ch.back)
+    if ch.center and ch.center.atlas and center_xy then -- (an AnimatedSprite in the Blinds collection)
         item.ca = ch.center.atlas.name
-        item.cp = arr({ num(ch.center.sprite_pos.x), num(ch.center.sprite_pos.y) })
+        item.cp = arr({ num(center_xy.x), num(center_xy.y) })
     end
-    if ch.front and ch.front.atlas and a.effect ~= "Stone Card" then -- stone cards hide rank and suit
+    if ch.front and ch.front.atlas and front_xy and a.effect ~= "Stone Card" then -- stone cards hide rank and suit
         item.fa = ch.front.atlas.name
-        item.fp = arr({ num(ch.front.sprite_pos.x), num(ch.front.sprite_pos.y) })
+        item.fp = arr({ num(front_xy.x), num(front_xy.y) })
     end
-    if ch.back and ch.back.atlas then
+    if ch.back and ch.back.atlas and back_xy then
         item.ba = ch.back.atlas.name
-        item.bp = arr({ num(ch.back.sprite_pos.x), num(ch.back.sprite_pos.y) })
+        item.bp = arr({ num(back_xy.x), num(back_xy.y) })
     end
     -- what the game draws on top of the card: its seal, then stickers (Eternal, Perishable, Rental,
     -- stake stickers, mod stickers) - each a sprite {a = atlas, p = {x, y}}
     if item.f == "front" then
-        local ov = arr()
-        local function overlay(sprite)
-            if sprite and sprite.atlas and sprite.atlas.name and sprite.sprite_pos then
-                ov[#ov + 1] = { a = sprite.atlas.name, p = arr({ num(sprite.sprite_pos.x), num(sprite.sprite_pos.y) }) }
-            end
+        local ov = card_stickers(card)
+        -- legendary jokers (Perkeo, Canio, ...), Hologram and The Soul: the face floats above the card
+        -- as its own sprite (drawn first, under the stickers)
+        if ch.floating_sprite and ch.floating_sprite.atlas and ch.floating_sprite.atlas.name and ch.floating_sprite.sprite_pos then
+            table.insert(ov, 1, { a = ch.floating_sprite.atlas.name, p = arr({ num(ch.floating_sprite.sprite_pos.x), num(ch.floating_sprite.sprite_pos.y) }) })
         end
-        if card.seal and G.shared_seals then overlay(G.shared_seals[card.seal]) end
-        if a.eternal then overlay(G.shared_sticker_eternal or (G.shared_stickers and G.shared_stickers.eternal)) end
-        if a.perishable then overlay(G.shared_sticker_perishable or (G.shared_stickers and G.shared_stickers.perishable)) end
-        if a.rental then overlay(G.shared_sticker_rental or (G.shared_stickers and G.shared_stickers.rental)) end
-        for key, sprite in pairs(G.shared_stickers or {}) do -- stickers added by mods keep their flag in ability
-            if a[key] == true and key ~= "eternal" and key ~= "perishable" and key ~= "rental" then overlay(sprite) end
-        end
-        local stake_sticker = card.sticker or (G.SETTINGS and G.SETTINGS.run_stake_stickers and card.sticker_run)
-        if stake_sticker and stake_sticker ~= "NONE" and G.shared_stickers then overlay(G.shared_stickers[stake_sticker]) end
         if #ov > 0 then item.ov = ov end
     end
     if put_rect(item, card) then
@@ -613,14 +650,25 @@ local function build_scene()
                 -- chain to the card: it is the owner, so VR can put the tooltip next to the card
                 -- wherever it is drawn (shop on the table, packs, ...)
                 local owner, node = nil, box
-                for _ = 1, 6 do
+                for _ = 1, 10 do
                     local cfg = node.config or {}
-                    node = cfg.major or cfg.parent or (node.role and node.role.major)
+                    node = cfg.major or cfg.parent or (node.role and node.role.major) or node.UIBox
                     if type(node) ~= "table" then break end
                     if is_a(node, Card) then owner = node; break end
                 end
                 queue_popup(box, owner)
             end
+        end
+    end
+    -- an extra info box ("Polychrome", "Eternal" ...) whose chain didn't reach the card: it belongs to
+    -- the card whose tooltip is showing (only one card's tooltip is open at a time)
+    local shown_owner = nil
+    for _, e in ipairs(SCN.late) do
+        if e.owner then shown_owner = e.owner; break end
+    end
+    if shown_owner then
+        for _, e in ipairs(SCN.late) do
+            if not e.owner and e.box and e.box.config and (e.box.config.major or e.box.config.parent) then e.owner = shown_owner end
         end
     end
     local i = 1
@@ -785,6 +833,76 @@ local function free_ui(t, seen, depth)
     end
 end
 
+-- Jokers whose changing value is not in a "(Currently ...)" line of their tooltip: read straight
+-- from the card (by the joker's name, as the game itself does). `shown` is what the tooltip gave.
+local function round_card() return G.GAME and G.GAME.current_round or {} end
+-- (a face-down card in the hand - The House, The Wheel, The Mark, The Fish - must not be given away)
+local function any_face_down(cards)
+    for _, c in ipairs(cards or {}) do
+        if c.facing == "back" then return true end
+    end
+    return false
+end
+local JOKER_LIVE = {
+    ["Loyalty Card"] = function(c)
+        local r = c.ability.loyalty_remaining
+        if r == nil then return nil end
+        return r == 0 and "Active!" or (r .. " remaining")
+    end,
+    ["Banner"] = function(c) -- +30 Chips per discard left
+        local d = round_card().discards_left
+        return d and ("+" .. (c.ability.extra * d) .. " Chips") or nil
+    end,
+    ["Raised Fist"] = function(c) -- double the lowest rank held in hand
+        if not (G.hand and G.hand.cards and #G.hand.cards > 0) or any_face_down(G.hand.cards) then return nil end
+        local m, id = 15, 15
+        for _, h in ipairs(G.hand.cards) do
+            if id >= h.base.id and h.ability.effect ~= "Stone Card" then m = h.base.nominal; id = h.base.id end
+        end
+        return id < 15 and ("+" .. (2 * m) .. " Mult") or nil
+    end,
+    ["Supernova"] = function(c) -- the selected poker hand's times played
+        if not (G.hand and G.hand.highlighted and #G.hand.highlighted > 0) or any_face_down(G.hand.highlighted) then return nil end
+        local text = G.FUNCS.get_poker_hand_info(G.hand.highlighted)
+        local h = text and G.GAME.hands[text]
+        return h and ("+" .. h.played .. " Mult") or nil
+    end,
+    ["Misprint"] = function(c)
+        local e = c.ability.extra
+        return type(e) == "table" and ("+" .. e.min .. " to +" .. e.max .. " Mult") or nil
+    end,
+    ["Egg"] = function(c) return "Sells for $" .. c.sell_cost end,
+    ["Rocket"] = function(c) return "$" .. c.ability.extra.dollars .. " per round" end,
+    ["Turtle Bean"] = function(c) return "+" .. c.ability.extra.h_size .. " hand size" end,
+    ["Ice Cream"] = function(c) return "+" .. c.ability.extra.chips .. " Chips" end,
+    ["Popcorn"] = function(c) return "+" .. c.ability.mult .. " Mult" end,
+    ["Ramen"] = function(c) return "X" .. string.format("%.2f", c.ability.x_mult) .. " Mult" end,
+    ["Seltzer"] = function(c) return c.ability.extra .. " hands left" end,
+    -- the target changes every round: which suit / card / rank / hand it is now
+    ["Ancient Joker"] = function(c)
+        local s = round_card().ancient_card
+        return s and s.suit and localize(s.suit, "suits_plural") or nil
+    end,
+    ["The Idol"] = function(c)
+        local s = round_card().idol_card
+        return s and s.rank and (localize(s.rank, "ranks") .. " of " .. localize(s.suit, "suits_plural")) or nil
+    end,
+    ["Mail-In Rebate"] = function(c)
+        local s = round_card().mail_card
+        return s and s.rank and localize(s.rank, "ranks") or nil
+    end,
+    ["To Do List"] = function(c)
+        return c.ability.to_do_poker_hand and localize(c.ability.to_do_poker_hand, "poker_hands") or nil
+    end,
+    ["Castle"] = function(c, shown) -- its chips, and this round's suit
+        local s = round_card().castle_card
+        return s and s.suit and ((shown ~= "" and shown .. " - " or "") .. localize(s.suit, "suits_plural")) or nil
+    end,
+    ["Fortune Teller"] = function(c, shown) -- the tooltip says just "+12"
+        return shown ~= "" and not shown:find("Mult") and (shown .. " Mult") or nil
+    end,
+}
+
 local function joker_value(card)
     local now = love.timer.getTime()
     local cached = joker_values[card]
@@ -804,6 +922,11 @@ local function joker_value(card)
         end
     end
     if ok and type(t) == "table" then free_ui(t, {}, 0) end -- give back what the tooltip table created
+    local live = card.ability and JOKER_LIVE[card.ability.name]
+    if live then
+        local ok2, v = pcall(live, card, value)
+        if ok2 and type(v) == "string" and v ~= "" then value = v end
+    end
     joker_values[card] = { t = now, v = value }
     return value
 end
@@ -816,6 +939,8 @@ local function joker_state(card, slot)
     local j = {
         uid = oid(card), slot = slot, key = card.config.center.key, name = a.name or "",
         edition = card.edition and card.edition.type or "", debuffed = card.debuff and true or false,
+        facing = card.facing or "front", -- "back": turned face down (The Amber Acorn) - VR hides what it is
+        pinned = card.pinned and true or false, -- (challenges) stays the leftmost joker: VR shows a pin and keeps it there
         ab = {
             mult = num(a.mult),
             x_mult = num(a.x_mult),
@@ -826,8 +951,9 @@ local function joker_state(card, slot)
         -- the game stores either a table (chips, h_size, every, ...) or a single number in "extra"
         extra = type(a.extra) == "table" and plain_fields(a.extra) or { value = num(a.extra) },
         target = {},
-        value = joker_value(card), -- "+12 Mult" ...: shown on the joker's pedestal in VR
+        value = card.facing == "back" and "" or joker_value(card), -- "+12 Mult" ...: shown on the joker's pedestal in VR
         sell = num(card.sell_cost), -- the price sticker under the pedestal
+        stickers = card_stickers(card), -- Eternal, Rental, ... shown as small badges on the 3D pedestal
     }
     local n = a.name
     if n == "Castle" and cr.castle_card then
@@ -885,13 +1011,66 @@ local function consumable_state(in_run)
         local ok, usable = pcall(function() return c:can_use_consumeable() end)
         out[#out + 1] = { uid = oid(c), slot = i, set = c.ability and c.ability.set or "",
                           key = c.config and c.config.center and c.config.center.key or "",
-                          can_use = (ok and usable) and true or false,
+                          can_use = (ok and usable) and true or false, sell = num(c.sell_cost),
                           can_sell = (c.can_sell_card and c:can_sell_card()) and true or false }
     end
     return out
 end
 
 -- Profile statistics for the casino's Hall of Fame / Hall of Shame (all runs of this profile)
+-- Stats -> Card Stats: the game's bar chart of the most used jokers / consumables / vouchers. VR
+-- builds it as columns standing around you in a half circle. The tab being shown is recorded when
+-- the game builds it; the chart is gone as soon as another overlay opens or the menu closes.
+VR.usage = nil
+VR.usage_open = false
+local SET_ATLAS = { Joker = "Joker", Tarot = "Tarot", Planet = "Tarot", Spectral = "Tarot", Voucher = "Voucher" }
+local usage_ref = create_UIBox_usage
+function create_UIBox_usage(args)
+    local r = usage_ref(args)
+    local ok, info = pcall(function()
+        args = args or {}
+        local kind, set = args[1], args[2]
+        local list = {}
+        for k, v in pairs(G.PROFILES[G.SETTINGS.profile][kind] or {}) do
+            local c = G.P_CENTERS[k]
+            if c and (not set or c.set == set) and c.discovered then list[#list + 1] = { key = k, count = v.count or 0, c = c } end
+        end
+        table.sort(list, function(a, b) return a.count > b.count end)
+        local out = arr()
+        for i = 1, math.min(10, #list) do
+            local e = list[i]
+            local col = (G.C.SECONDARY_SET and G.C.SECONDARY_SET[e.c.set]) or G.C.RED
+            local ok_name, name = pcall(localize, { type = "name_text", set = e.c.set, key = e.key })
+            out[#out + 1] = {
+                key = e.key, count = num(e.count), set = e.c.set or "",
+                name = ok_name and type(name) == "string" and name or (e.c.name or e.key),
+                colour = arr({ num(col[1]), num(col[2]), num(col[3]) }),
+                sprite = sprite_ref(e.c.atlas or SET_ATLAS[e.c.set] or "centers", e.c.pos),
+            }
+        end
+        local titles = { joker_usage = "Jokers", consumeable_usage = "Consumables", Tarot = "Tarots", Planet = "Planets",
+            Spectral = "Spectrals", Voucher = "Vouchers" }
+        local tabs = arr()
+        for _, k in ipairs({ "b_stat_jokers", "b_stat_consumables", "b_stat_tarots", "b_stat_planets", "b_stat_spectrals", "b_stat_vouchers" }) do
+            tabs[#tabs + 1] = localize(k) -- (the tab buttons' labels: VR switches tabs with them)
+        end
+        return { title = titles[set or kind] or "", cards = out, tabs = tabs, current = titles[set or kind] or "" }
+    end)
+    if ok then VR.usage = info else log("card stats: " .. tostring(info)) end
+    return r
+end
+local overlay_menu_ref = G.FUNCS.overlay_menu
+G.FUNCS.overlay_menu = function(...)
+    VR.usage_open = false -- (another overlay: the chart goes)
+    return overlay_menu_ref(...)
+end
+local usage_open_ref = G.FUNCS.usage
+G.FUNCS.usage = function(...)
+    local r = usage_open_ref(...)
+    VR.usage_open = true
+    return r
+end
+
 local function profile_stats()
     local p = G.PROFILES and G.SETTINGS and G.PROFILES[G.SETTINGS.profile]
     if not p then return nil end
@@ -928,11 +1107,195 @@ local function can_reroll_now()
     return ((G.GAME.dollars or 0) - (G.GAME.bankrupt_at or 0)) - (cr.reroll_cost or 0) >= 0
 end
 
+-- The text of a UI definition (rows become lines): the game's own deck / stake descriptions. Any
+-- DynaText in it is freed right away (they would pile up otherwise).
+local function definition_text(def)
+    local lines = {}
+    local function walk(n, line)
+        if type(n) ~= "table" then return line end
+        local cfg = n.config or {}
+        if n.n == G.UIT.T and cfg.text then
+            line = line .. tostring(cfg.text)
+        elseif n.n == G.UIT.O and type(cfg.object) == "table" and cfg.object.strings then
+            local s = cfg.object.strings[cfg.object.focused_string or 1]
+            if s and s.string then line = line .. tostring(s.string) end
+        end
+        for _, c in ipairs(n.nodes or {}) do
+            if type(c) == "table" and c.n == G.UIT.R then
+                local sub = walk(c, "")
+                if sub ~= "" then lines[#lines + 1] = sub end
+            else
+                line = walk(c, line)
+            end
+        end
+        return line
+    end
+    local rest = walk(def, "")
+    if rest ~= "" then lines[#lines + 1] = rest end
+    free_ui(def, {}, 0)
+    return table.concat(lines, "\n")
+end
+
+-- localize() description nodes: a list of lines, each a list of text nodes
+local function loc_lines(nodes)
+    local out = {}
+    for _, line in ipairs(nodes or {}) do
+        local s = ""
+        for _, n in ipairs(line) do
+            if type(n) == "table" and n.config and n.config.text then s = s .. tostring(n.config.text) end
+            if type(n) == "table" and n.config and type(n.config.object) == "table" and n.config.object.strings then
+                local d = n.config.object.strings[n.config.object.focused_string or 1]
+                if d and d.string then s = s .. tostring(d.string) end
+            end
+        end
+        if s ~= "" then out[#out + 1] = s end
+    end
+    free_ui(nodes, {}, 0)
+    return table.concat(out, "\n")
+end
+
+-- The VR "New Run" table: every deck (name, description, back sprite, unlocked, highest stake that
+-- may be played with it) and every stake (name, description, chip sprite). Built once per visit to
+-- the main menu: the descriptions come from the game's own texts.
+local function setup_info()
+    local profile = G.PROFILES[G.SETTINGS.profile] or {}
+    local all = profile.all_unlocked and true or false
+    local stakes = arr()
+    local stake_pool = G.P_CENTER_POOLS.Stake or {}
+    for i, st in ipairs(stake_pool) do
+        local nodes = {}
+        pcall(localize, { type = 'descriptions', key = st.key, set = st.set, nodes = nodes })
+        local ok_name, name = pcall(localize, { type = 'name_text', key = st.key, set = st.set })
+        stakes[#stakes + 1] = { index = i, key = st.key, name = ok_name and name or st.key, text = loc_lines(nodes),
+                                sprite = sprite_ref(st.atlas or "chips", st.pos) }
+    end
+    local decks = arr()
+    for _, center in ipairs(G.P_CENTER_POOLS.Back or {}) do
+        local unlocked = (center.unlocked or all) and true or false
+        local ok_text, text = pcall(function() return definition_text(Back(center):generate_UI()) end)
+        local ok_name, name = pcall(localize, { type = 'name_text', set = 'Back', key = center.key })
+        local won = get_deck_win_stake(center.key) or 0
+        decks[#decks + 1] = {
+            key = center.key, name = (ok_name and unlocked) and name or "Locked Deck", unlocked = unlocked,
+            text = ok_text and text or "", sprite = sprite_ref(center.atlas or "centers", center.pos), -- (VR greys locked ones)
+            max_stake = all and #stake_pool or math.min(won + 1, #stake_pool),
+        }
+    end
+    local memory = profile.MEMORY or {}
+    local last_deck = "b_red"
+    for _, center in ipairs(G.P_CENTER_POOLS.Back or {}) do
+        if center.name == memory.deck then last_deck = center.key end
+    end
+    return { decks = decks, stakes = stakes, last_deck = last_deck, last_stake = num(memory.stake or 1),
+             tutorial_done = G.SETTINGS.tutorial_complete and true or false }
+end
+
+-- The VR main menu: the saved run for the "Continue" stack (deck, ante, round) and the profile name.
+-- The save file is read once per visit to the main menu (as the run setup screen does it).
+-- A profile was (re)loaded - switched in the profile select, or its data wiped: the game builds its
+-- cards' unlocks anew, so the saved run and the New Run table's decks are read again afterwards.
+local init_item_prototypes_ref = Game.init_item_prototypes
+function Game:init_item_prototypes(...)
+    local r = init_item_prototypes_ref(self, ...)
+    VR.menu_save_read = false
+    return r
+end
+
+local function menu_info()
+    -- (read again when the profile changed: switching profiles stays in the main menu)
+    if VR.menu_save_read ~= true or VR.menu_profile ~= G.SETTINGS.profile then
+        VR.menu_save_read = true
+        VR.menu_profile = G.SETTINGS.profile
+        local raw = get_compressed(G.SETTINGS.profile .. '/' .. 'save.jkr')
+        VR.menu_save = raw and STR_UNPACK(raw) or nil
+        local ok, info = pcall(setup_info)
+        VR.menu_setup = ok and info or nil
+        if not ok then log("new run table: " .. tostring(info)) end
+    end
+    local saved = nil
+    local s = VR.menu_save
+    if type(s) == "table" and type(s.GAME) == "table" and type(s.BACK) == "table" then
+        local key = "b_red"
+        for k, v in pairs(G.P_CENTERS) do
+            if v.name == s.BACK.name and v.set == "Back" then key = k end
+        end
+        local c = G.P_CENTERS[key]
+        local rr = s.GAME.round_resets or {}
+        saved = {
+            deck_key = key, deck_name = s.BACK.name or "",
+            ante = num(rr.ante), round = num(s.GAME.round), dollars = num(s.GAME.dollars),
+            sprite = c and sprite_ref(c.atlas or "centers", c.pos) or nil,
+        }
+    end
+    local profile = G.PROFILES and G.SETTINGS and G.PROFILES[G.SETTINGS.profile]
+    return { saved = saved, profile = profile and profile.name or "", overlay = G.OVERLAY_MENU ~= nil, setup = VR.menu_setup }
+end
+
+-- Text boxes (the seed of a seeded run, a profile's name ...): the game updates each visible one
+-- every frame through G.FUNCS.text_input. The last one seen is the one VR's keyboard types into.
+local text_input_ref = G.FUNCS.text_input
+G.FUNCS.text_input = function(e)
+    VR.text_box, VR.text_box_t = e, love.timer.getTime()
+    return text_input_ref(e)
+end
+
+local function text_input_state()
+    local e = VR.text_box
+    if not (e and VR.text_box_t and love.timer.getTime() - VR.text_box_t < 0.5) then return nil end
+    local args = e.config and e.config.ref_table
+    local t = args and args.text
+    if not (t and t.ref_table) then return nil end
+    return { text = tostring(t.ref_table[t.ref_value] or ""), hooked = G.CONTROLLER.text_input_hook == e,
+             max = num(args.max_length or 16), extended = args.extended_corpus and true or false,
+             caps = args.all_caps and true or false, prompt = tostring(args.prompt_text or "") }
+end
+
+-- The score flames behind chips and mult (strength and colours), while they burn
+local function score_flame(name)
+    local args = G.ARGS and G.ARGS[name]
+    local intensity = args and num(args.real_intensity or args.intensity) or 0
+    if intensity <= 0.01 then return nil end
+    return { i = r3(intensity), c = col(args.colour_1), c2 = col(args.colour_2) }
+end
+
+-- The boss rule as one line of text. The game keeps it in blind.loc_debuff_lines: plain strings in
+-- vanilla, but newer Steamodded puts the parsed description there instead (per line a list of parts
+-- {strings = {"text", {"1"} ...}}, where {"1"} stands for loc_debuff_lines.vars[1]).
+local function blind_desc(blind)
+    local lines = blind and blind.loc_debuff_lines
+    if type(lines) ~= "table" then return "" end
+    local vars = type(lines.vars) == "table" and lines.vars or {}
+    local out = {}
+    local function walk(t)
+        if type(t) == "string" then out[#out + 1] = t; return end
+        if type(t) ~= "table" then return end
+        if type(t.strings) == "table" then -- one part of a parsed line
+            for _, s in ipairs(t.strings) do
+                if type(s) == "string" then
+                    out[#out + 1] = s
+                elseif type(s) == "table" and vars[tonumber(s[1]) or 0] ~= nil then
+                    out[#out + 1] = tostring(vars[tonumber(s[1])])
+                end
+            end
+            return
+        end
+        for _, c in ipairs(t) do walk(c) end
+    end
+    for _, line in ipairs(lines) do
+        walk(line)
+        out[#out + 1] = " "
+    end
+    return (table.concat(out):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 local function build_state()
     local game = G.GAME or {}
     local in_run = G.STAGE == G.STAGES.RUN
+    local main_menu = G.STAGE == G.STAGES.MAIN_MENU
+    if not main_menu then VR.menu_save_read = false end -- read the save again on the next visit
     local cr = game.current_round or {}
-    local back = game.selected_back
+    -- in a run the chosen deck is selected_back; on the run setup screen the deck being looked at is viewed_back
+    local back = game.selected_back or (not in_run and game.viewed_back) or nil
     local blind = game.blind
     local back_center = back and back.effect and back.effect.center
     local stake = G.P_CENTER_POOLS and G.P_CENTER_POOLS.Stake and G.P_CENTER_POOLS.Stake[game.stake or 1]
@@ -955,6 +1318,7 @@ local function build_state()
             composition = deck_composition(),
         },
         overlay = G.OVERLAY_MENU ~= nil,
+        menu = main_menu and menu_info() or nil, -- only in the main menu: the VR menu on the table
         viewing_deck = VR.deck_view_open and G.OVERLAY_MENU ~= nil or false,
         round = {
             ante = num(game.round_resets and game.round_resets.ante),
@@ -964,6 +1328,14 @@ local function build_state()
             chips = num(game.chips),
             dollars = num(game.dollars),
             run_chips = in_run and num(game.vr_run_chips) or 0, -- every round's score of this run added up
+            -- the poker hand of the selected cards, as the run panel shows it ("Flush", " Lvl.3", chips x mult)
+            hand = cr.current_hand and {
+                name = tostring(cr.current_hand.handname or ""),
+                level = tostring(cr.current_hand.hand_level or ""),
+                chips = tostring(cr.current_hand.chip_text or ""),
+                mult = tostring(cr.current_hand.mult_text or ""),
+                cf = score_flame("chip_flames"), mf = score_flame("mult_flames"), -- (VR: flames over the play stand)
+            } or nil,
         },
         blind = {
             name = blind and blind.name or "",
@@ -972,7 +1344,8 @@ local function build_state()
             boss = (blind and blind.boss) and true or false,
             -- the boss rule as the game words it ("Cards played previously this Ante are debuffed")
             colour = blind_center and blind_center.boss_colour and col(blind_center.boss_colour) or nil, -- the chip colour: VR tints the room
-            desc = blind and type(blind.loc_debuff_lines) == "table" and table.concat(blind.loc_debuff_lines, " "):gsub("^%s+", ""):gsub("%s+$", "") or "",
+            -- (never lets the whole state fail: an unexpected text format only loses the rule)
+            desc = (function() local ok, d = pcall(blind_desc, blind); return ok and d or "" end)(),
             sprite = blind_center and sprite_ref(blind_center.atlas or "blind_chips", { x = 0, y = blind_center.pos and blind_center.pos.y or 0 }),
         },
         -- the animated SHOP sign; VR shows it next to the shop instead of the game's sign box
@@ -992,6 +1365,8 @@ local function build_state()
         pack_waiting = VR.pending_pack ~= nil,
         blind_on_deck = in_run and tostring(game.blind_on_deck or "") or "",
         stats = (function() local ok, s = pcall(profile_stats); return ok and s or nil end)(),
+        card_stats = (VR.usage_open and G.OVERLAY_MENU and VR.usage) or nil, -- the Card Stats chart (VR: columns around you)
+        text_input = text_input_state(), -- a seed / profile name box on screen: VR shows its keyboard
     }
 end
 
@@ -1032,6 +1407,9 @@ local HANDLERS = {
         if m.hands ~= nil then VR.hands = (m.hands == true or m.hands == "true") end
         if type(m.spec) == "string" then VR.spectator = m.spec end
         if m.amb ~= nil then VR.ambience = (m.amb == true or m.amb == "true") end
+        if m.jimbo ~= nil then VR.jimbo = (m.jimbo == true or m.jimbo == "true") end
+        if m.floor ~= nil then VR.floor.cm = num(m.floor) end
+        if type(m.wheel) == "string" then VR.wheel_mode = m.wheel end
         return true
     end },
 
@@ -1132,6 +1510,15 @@ local HANDLERS = {
             wanted[#wanted + 1] = card
         end
         if #wanted ~= #area.cards then return false end
+        -- pinned jokers stay at the very left, in their own order (as the game's CardArea keeps them)
+        local pinned, rest = {}, {}
+        for _, card in ipairs(wanted) do
+            if card.pinned then pinned[#pinned + 1] = card else rest[#rest + 1] = card end
+        end
+        table.sort(pinned, function(a, b) return (a.sort_id or 0) < (b.sort_id or 0) end)
+        wanted = {}
+        for _, card in ipairs(pinned) do wanted[#wanted + 1] = card end
+        for _, card in ipairs(rest) do wanted[#wanted + 1] = card end
         for i, card in ipairs(wanted) do area.cards[i] = card end
         area:set_ranks()
         pcall(play_sound, "cardSlide1")
@@ -1316,9 +1703,11 @@ end
 -- client keeps the setting and tells it here (vr_flags), so the button shows the current state.
 VR.calm_lights = false
 VR.hands = true -- "VR: Hands": Jimbo's gloves in VR
+VR.jimbo = true -- "VR: Jimbo": Jimbo at the casino table
 VR.ambience = true -- "VR: Casino Sounds": slot machines, glasses, chips in the VR casino
+VR.wheel_mode = "Real" -- "VR: Wheel of Fortune": Off / Deterministic / Real (see Card:use_consumeable)
 VR.spectator = "Off" -- "VR: Spectator": the spectator camera window on the PC (Off / Eyes / Shoulder / Room)
-G.FUNCS.vr_show_tips = function(e) -- "VR: Show Tips": Jimbo's tips in VR again
+G.FUNCS.vr_show_tips = function(e) -- "VR: How To Play": Jimbo's tips in VR again
     G.FUNCS.exit_overlay_menu()
     VR.send_event("show_tutorial", {})
 end
@@ -1329,10 +1718,20 @@ local function vr_settings_box()
         b("VR: Switch Hands", "vr_toggle_hand"),
         b("VR: Calm Lights: " .. (VR.calm_lights and "On" or "Off"), "vr_toggle_calm"),
         b("VR: Hands: " .. (VR.hands and "On" or "Off"), "vr_toggle_hands"),
+        b("VR: Jimbo: " .. (VR.jimbo and "On" or "Off"), "vr_toggle_jimbo"),
         b("VR: Casino Sounds: " .. (VR.ambience and "On" or "Off"), "vr_toggle_ambience"),
         b("VR: Spectator: " .. tostring(VR.spectator), "vr_cycle_spectator"),
-        b("VR: Show Tips", "vr_show_tips"),
+        b("VR: Wheel of Fortune: " .. tostring(VR.wheel_mode), "vr_cycle_wheel"),
+        b("VR: How To Play", "vr_show_tips"),
+        -- the casino floor up or down (cm), when you seem to float or sink in the virtual casino
+        create_slider({ label = "VR: Casino Floor Height (cm)", w = 5, h = 0.4, ref_table = VR.floor, ref_value = "cm",
+                        min = -60, max = 60, callback = "vr_floor_changed" }),
     } })
+end
+
+-- the floor slider: every change goes to the VR client at once (it saves it for sitting / standing)
+G.FUNCS.vr_floor_changed = function(rt)
+    VR.send_event("floor_height", { cm = num(rt.ref_table[rt.ref_value]) })
 end
 
 G.FUNCS.vr_settings = function(e)
@@ -1358,8 +1757,16 @@ G.FUNCS.vr_toggle_ambience = function(e)
     VR.send_event("toggle_ambience", {})
     refresh_vr_settings()
 end
+G.FUNCS.vr_toggle_jimbo = function(e)
+    VR.send_event("toggle_jimbo", {})
+    refresh_vr_settings()
+end
 G.FUNCS.vr_toggle_hands = function(e)
     VR.send_event("toggle_hands", {})
+    refresh_vr_settings()
+end
+G.FUNCS.vr_cycle_wheel = function(e)
+    VR.send_event("cycle_wheel", {})
     refresh_vr_settings()
 end
 G.FUNCS.vr_toggle_calm = function(e)
@@ -1378,9 +1785,27 @@ G.FUNCS.vr_test_money = function(e)
     give_test_money()
 end
 
+-- Extreme mode for testing (also only with TEST_MONEY): each press gives the run more room, like
+-- vouchers would - hand size, joker slots and consumable slots (F9 or "Test: Extreme" in Options)
+local TEST_EXTREME = { hand = 3, jokers = 3, consumables = 2 }
+local function give_test_extreme()
+    if not TEST_MONEY or G.STAGE ~= G.STAGES.RUN or not G.GAME then return end
+    if G.hand then G.hand:change_size(TEST_EXTREME.hand) end -- (draws the extra cards in a round)
+    if G.jokers then G.jokers.config.card_limit = G.jokers.config.card_limit + TEST_EXTREME.jokers end
+    if G.consumeables then G.consumeables.config.card_limit = G.consumeables.config.card_limit + TEST_EXTREME.consumables end
+    log(("test extreme: hand +%d, jokers %d, consumables %d"):format(TEST_EXTREME.hand, -- (the hand grows a moment later)
+        G.jokers and G.jokers.config.card_limit or 0, G.consumeables and G.consumeables.config.card_limit or 0))
+end
+
+G.FUNCS.vr_test_extreme = function(e)
+    G.FUNCS.exit_overlay_menu()
+    give_test_extreme()
+end
+
 local keypressed_ref = love.keypressed
 function love.keypressed(key, ...)
     if key == "f8" then give_test_money() end
+    if key == "f9" then give_test_extreme() end
     if keypressed_ref then return keypressed_ref(key, ...) end
 end
 
@@ -1400,6 +1825,8 @@ function create_UIBox_options()
                     list[#list + 1] = UIBox_button({ label = { "VR Settings" }, button = "vr_settings", minw = 5, colour = G.C.GREEN })
                     if TEST_MONEY and G.STAGE == G.STAGES.RUN then
                         list[#list + 1] = UIBox_button({ label = { "Test: +$" .. TEST_MONEY_AMOUNT }, button = "vr_test_money", minw = 5, colour = G.C.MONEY or G.C.GOLD })
+                        list[#list + 1] = UIBox_button({ label = { ("Test: Extreme (+%d Hand, +%d Jokers)"):format(TEST_EXTREME.hand, TEST_EXTREME.jokers) },
+                            button = "vr_test_extreme", minw = 5, colour = G.C.PURPLE or G.C.RED })
                     end
                 end
             end
@@ -1413,12 +1840,139 @@ function create_UIBox_options()
     return result
 end
 
+-- Settings in VR: only what changes something in VR. Gone: play/discard position (on the
+-- controllers in VR), rumble (VR vibrates by itself), screenshake, shadows, CRT and bloom (2D
+-- effects) and the whole Video tab (the desktop window). Pixel smoothing (the texture size VR gets)
+-- moves to the Game tab, so there are two tabs: Game and Audio. Without VR: the game's own menu.
+local function vr_settings_game_tab()
+    return { n = G.UIT.ROOT, config = { align = "cm", padding = 0.05, colour = G.C.CLEAR }, nodes = {
+        create_option_cycle({ label = localize('b_set_gamespeed'), scale = 0.8, options = { 0.5, 1, 2, 4 }, opt_callback = 'change_gamespeed',
+            current_option = (G.SETTINGS.GAMESPEED == 0.5 and 1 or G.SETTINGS.GAMESPEED == 4 and 4 or G.SETTINGS.GAMESPEED + 1) }),
+        create_toggle({ label = localize('ph_display_stickers'), ref_table = G.SETTINGS, ref_value = 'run_stake_stickers' }),
+        create_toggle({ label = localize('b_high_contrast_cards'), ref_table = G.SETTINGS, ref_value = 'colourblind_option', callback = G.FUNCS.refresh_contrast_mode }),
+        create_toggle({ label = localize('b_reduced_motion'), ref_table = G.SETTINGS, ref_value = 'reduced_motion' }),
+        create_option_cycle({ w = 4, scale = 0.8, label = localize("b_set_pixel_smoothing"), options = localize('ml_smoothing_opt'),
+            opt_callback = 'change_pixel_smoothing', current_option = G.SETTINGS.GRAPHICS.texture_scaling }),
+        G.F_CRASH_REPORTS and create_toggle({ label = localize('b_set_crash_reports'), ref_table = G.SETTINGS, ref_value = 'crashreports',
+            info = localize('ml_crash_report_info') }) or nil,
+    } }
+end
+
+local create_settings_ref = create_UIBox_settings
+function create_UIBox_settings(...)
+    if NET.state ~= "connected" then return create_settings_ref(...) end
+    local tabs = {
+        { label = localize('b_set_game'), chosen = true, tab_definition_function = vr_settings_game_tab },
+        { label = localize('b_set_audio'), tab_definition_function = G.UIDEF.settings_tab, tab_definition_function_args = 'Audio' },
+    }
+    return create_UIBox_generic_options({ back_func = 'options', contents = {
+        create_tabs({ tabs = tabs, tab_h = 7.05, tab_alignment = 'tm', snap_to_nav = true }),
+    } })
+end
+
 -- Main menu: a YouTube button (the mod author's channel) instead of the Discord / X icons
 local YOUTUBE_URL = "https://www.youtube.com/@UnderTheVRadar"
 
 G.FUNCS.vr_go_to_youtube = function(e)
     love.system.openURL(YOUTUBE_URL)
 end
+
+-- The VR client asks for texture atlases it needs on its own (Solatro: the playing cards and the
+-- joker card while the game itself only shows its main menu)
+HANDLERS.need_atlas = { gated = false, fn = function(m)
+    for _, name in ipairs(m.names or {}) do
+        if type(name) == "string" and ((G.ASSET_ATLAS and G.ASSET_ATLAS[name]) or (G.ANIMATION_ATLAS and G.ANIMATION_ATLAS[name])) then
+            VR.state_atlases[name] = true
+        end
+    end
+    return true
+end }
+
+-- A slider (volume, ...) moved with the VR beam: the client sends where on the track the beam is
+-- (frac 0..1); the value is set like G.FUNCS.slider does it while the mouse drags.
+HANDLERS.slider = { gated = false, fn = function(m)
+    local e = objs[m.target or -1]
+    if not (type(e) == "table" and e.config and e.config.func == "slider" and e.children and e.children[1]) then return false end
+    local c = e.children[1]
+    local rt = c.config and c.config.ref_table
+    if not (rt and rt.ref_table and rt.ref_value) then return false end
+    local f = math.max(0, math.min(1, tonumber(m.frac) or 0))
+    rt.ref_table[rt.ref_value] = rt.min + (rt.max - rt.min) * f
+    rt.text = string.format("%." .. tostring(rt.decimal_places or 0) .. "f", rt.ref_table[rt.ref_value])
+    c.T.w = f * rt.w
+    c.config.w = c.T.w
+    if rt.callback then G.FUNCS[rt.callback](rt) end
+    return true
+end }
+
+-- The VR main menu on the casino table: the buzzer (Play), the saved run's stack (Continue), the
+-- album (Collection), the bell (Options), the YouTube sign and "QUIT VR AND GAME" (quits Balatro;
+-- "QUIT ONLY VR" is the client's own business). They do what the game's own buttons do.
+HANDLERS.menu = { gated = true, fn = function(m)
+    if G.STAGE ~= G.STAGES.MAIN_MENU then return false end
+    local action = m.action
+    if action == "quit_game" then
+        love.event.quit()
+        return true
+    elseif action == "youtube" then
+        love.system.openURL(YOUTUBE_URL)
+        return true
+    end
+    if G.OVERLAY_MENU then return false end -- another menu is open: close it first
+    if action == "play" then
+        return click_ui_button("main_menu_play", G.MAIN_MENU_UI) -- (run setup, or the tutorial the first time)
+    elseif action == "continue" then
+        if not G.SAVED_GAME then
+            local raw = get_compressed(G.SETTINGS.profile .. '/' .. 'save.jkr')
+            G.SAVED_GAME = raw and STR_UNPACK(raw) or nil
+        end
+        if not G.SAVED_GAME then return false end
+        G.SETTINGS.current_setup = 'Continue'
+        G.FUNCS.start_run(nil, { savetext = G.SAVED_GAME })
+        return true
+    elseif action == "start" then
+        -- the VR "New Run" table: a deck put on the mat, a stake chip on it, START pressed. Like the
+        -- run setup's PLAY: the chosen deck becomes the viewed one, deck and stake are remembered,
+        -- an unfinished saved run ends the win streak.
+        local center = G.P_CENTERS[m.deck or ""]
+        local profile = G.PROFILES[G.SETTINGS.profile]
+        if not (center and center.set == "Back" and profile) then return false end
+        if not (center.unlocked or profile.all_unlocked) then return false end
+        local stake = math.floor(tonumber(m.stake) or 1)
+        local max_stake = profile.all_unlocked and #G.P_CENTER_POOLS.Stake
+            or math.min((get_deck_win_stake(center.key) or 0) + 1, #G.P_CENTER_POOLS.Stake)
+        if stake < 1 or stake > max_stake then return false end
+        G.GAME.viewed_back = Back(center)
+        profile.MEMORY = profile.MEMORY or {}
+        profile.MEMORY.deck = center.name
+        profile.MEMORY.stake = stake
+        G.viewed_stake = stake
+        G.SETTINGS.current_setup = 'New Run'
+        G.run_setup_seed = nil
+        G.challenge_tab = nil
+        if not G.SAVED_GAME then
+            local raw = get_compressed(G.SETTINGS.profile .. '/' .. 'save.jkr')
+            G.SAVED_GAME = raw and STR_UNPACK(raw) or nil
+        end
+        if G.SAVED_GAME ~= nil then
+            local streak = profile.high_scores and profile.high_scores.current_streak
+            if streak and not (G.SAVED_GAME.GAME and G.SAVED_GAME.GAME.won) then streak.amt = 0 end
+            G:save_settings()
+        end
+        G.FUNCS.start_run(nil, { stake = stake, seed = nil, challenge = nil })
+        return true
+    elseif action == "collection" then
+        G.FUNCS.your_collection()
+        return true
+    elseif action == "options" then
+        G.FUNCS.options()
+        return true
+    elseif action == "profile" then -- the name plate: the game's profile select (save slots 1-3)
+        G.FUNCS.profile_select({})
+        return true
+    end
+    return false
+end }
 
 local function text_row(text, colour, scale)
     return { n = G.UIT.R, config = { align = "cm" }, nodes = {
@@ -1477,6 +2031,18 @@ G.FUNCS.vr_quit_visible = function(e)
     if e.states.visible ~= on then e.states.visible = on end
 end
 
+-- Discord and X: shown in the flat menu, hidden while a VR client is connected (YouTube takes their place)
+G.FUNCS.vr_socials_visible = function(e)
+    local on = NET.state ~= "connected"
+    if e.states.visible ~= on then e.states.visible = on end
+end
+
+-- the YouTube block in the main menu: only while a VR client is connected (flat = the game's own menu)
+G.FUNCS.vr_youtube_visible = function(e)
+    local on = NET.state == "connected"
+    if e.states.visible ~= on then e.states.visible = on end
+end
+
 local main_menu_buttons_ref = create_UIBox_main_menu_buttons
 function create_UIBox_main_menu_buttons(...)
     local t = main_menu_buttons_ref(...)
@@ -1486,20 +2052,33 @@ function create_UIBox_main_menu_buttons(...)
         local row = holder and find_parent_of_button(t, nil, holder)
         if not row then return end
         local quit_vr = UIBox_button({ button = "vr_quit", colour = G.C.PURPLE or G.C.RED, minw = 2.65, minh = 1.35,
-                                       label = { "QUIT VR" }, scale = 0.45 * 1.2, col = true })
+                                       label = { "QUIT ONLY VR" }, scale = 0.45 * 1.2, col = true })
         quit_vr.config.func = "vr_quit_visible"
-        row.nodes[#row.nodes + 1] = { n = G.UIT.C, config = { align = "cm", minw = 0.2 }, nodes = {} }
+        -- the gap and the button only exist while VR is connected: the flat menu keeps the game's layout
+        row.nodes[#row.nodes + 1] = { n = G.UIT.C, config = { align = "cm", minw = 0.2, func = "vr_quit_visible" }, nodes = {} }
         row.nodes[#row.nodes + 1] = quit_vr
     end)
     local ok, err = pcall(function()
+        -- the Discord / X row stays as the game has it; in VR the YouTube block goes ABOVE it. The
+        -- block only shows while a VR client is connected, so the flat menu looks like the original.
         local row = find_parent_of_button(t, "go_to_discord")
+        local column = row and find_parent_of_button(t, nil, row)
+        -- Discord and X share this row: in VR the whole row is hidden, the flat menu keeps it
         if row then
-            row.nodes = { youtube_button() }
+            row.config = row.config or {}
+            row.config.func = "vr_socials_visible"
+        end
+        local block = { n = G.UIT.R, config = { align = "cm", padding = 0.2, func = "vr_youtube_visible" }, nodes = { youtube_button() } }
+        if column and column.nodes then
+            for i, child in ipairs(column.nodes) do
+                if child == row then
+                    table.insert(column.nodes, i, block)
+                    break
+                end
+            end
         else -- no Discord row (e.g. non-Steam build): add ours above the language button
             local corner = t.nodes and t.nodes[2]
-            if corner and corner.nodes then
-                table.insert(corner.nodes, 1, { n = G.UIT.R, config = { align = "cm", padding = 0.2 }, nodes = { youtube_button() } })
-            end
+            if corner and corner.nodes then table.insert(corner.nodes, 1, block) end
         end
     end)
     if not ok then log("youtube button: " .. tostring(err)) end
@@ -1543,7 +2122,296 @@ function VR.check_pending_pack()
     end
 end
 
+-- The Card Stats chart in VR has its own buttons: another tab (by its label), back to the stats, close.
+HANDLERS.card_stats = { gated = false, fn = function(m)
+    if not (G.OVERLAY_MENU and VR.usage_open) then return false end
+    if m.action == "tab" and type(m.label) == "string" then
+        return click_ui_button("tab_but_" .. m.label, G.OVERLAY_MENU)
+    elseif m.action == "back" then
+        G.FUNCS.high_scores()
+        return true
+    elseif m.action == "close" then
+        G.FUNCS.exit_overlay_menu()
+        return true
+    end
+    return false
+end }
+
+----------------------------------------------------------------------------
+-- VR collection: the main menu's COLLECTIONS AND STATS opens a shelf in VR instead of the game's
+-- collection panels. Every item of each collection page (jokers, decks, vouchers, tarots, planets,
+-- spectrals, enhancements, editions, seals, boosters, tags, blinds) with the picture the game shows
+-- for it (locked / undiscovered ones get the game's own locked and "?" pictures); its description
+-- is read on demand, when VR points at it.
+----------------------------------------------------------------------------
+local COLL_ATLAS = { Joker = "Joker", Tarot = "Tarot", Planet = "Tarot", Spectral = "Tarot", Voucher = "Voucher",
+                     Booster = "Booster" }
+
+local function coll_name(set, key)
+    local ok, name = pcall(localize, { type = "name_text", set = set, key = key })
+    return (ok and type(name) == "string" and name ~= "ERROR") and name or key
+end
+
+local function coll_center(c, cat)
+    local disc = c.discovered and true or false
+    local unl = c.unlocked ~= false
+    local atlas = c.atlas or COLL_ATLAS[c.set] or "centers"
+    local pos = c.pos
+    if c.set == "Joker" and not unl then atlas, pos = "Joker", G.j_locked.pos
+    elseif c.set == "Voucher" and not unl then atlas, pos = "Voucher", G.v_locked.pos
+    elseif c.consumeable and not unl then atlas, pos = "Tarot", G.c_locked.pos
+    elseif not disc and cat ~= "Back" and cat ~= "Enhanced" then
+        local undisc = { Joker = G.j_undiscovered, Edition = G.j_undiscovered, Tarot = G.t_undiscovered,
+            Planet = G.p_undiscovered, Spectral = G.s_undiscovered, Voucher = G.v_undiscovered,
+            Booster = G.booster_undiscovered }
+        if undisc[c.set] then
+            pos = undisc[c.set].pos
+            atlas = (c.set == "Edition") and "Joker" or (COLL_ATLAS[c.set] or atlas)
+        end
+    end
+    if cat == "Back" or cat == "Enhanced" then disc = unl end -- (decks and enhancements: unlocked = known)
+    VR.state_atlases[atlas] = true
+    local item = { key = c.key, set = c.set or "", disc = disc, unl = unl, ca = atlas,
+                   cp = arr({ num(pos and pos.x), num(pos and pos.y) }) }
+    item.name = (disc and unl) and coll_name(c.set, c.key) or (unl and "?????" or "Locked")
+    if disc and unl and c.soul_pos then -- legendaries: the floating face over the card
+        item.ov = arr({ { a = atlas, p = arr({ num(c.soul_pos.x), num(c.soul_pos.y) }) } })
+    end
+    if cat == "Edition" and disc then item.ed = c.key end
+    return item
+end
+
+local function collection_data()
+    local cats = arr()
+    local function add_cat(id, title, items)
+        local found = 0
+        for _, it in ipairs(items) do if it.disc and it.unl then found = found + 1 end end
+        cats[#cats + 1] = { id = id, title = title, items = items, found = found }
+    end
+    for _, c in ipairs({ { "Joker", "Jokers" }, { "Back", "Decks" }, { "Voucher", "Vouchers" }, { "Tarot", "Tarots" },
+                         { "Planet", "Planets" }, { "Spectral", "Spectrals" }, { "Enhanced", "Enhancements" } }) do
+        local items = arr()
+        for _, center in ipairs(G.P_CENTER_POOLS[c[1]] or {}) do items[#items + 1] = coll_center(center, c[1]) end
+        add_cat(c[1], c[2], items)
+    end
+    local eds = arr()
+    for _, e in ipairs({ "e_base", "e_foil", "e_holo", "e_polychrome", "e_negative" }) do
+        if G.P_CENTERS[e] then eds[#eds + 1] = coll_center(G.P_CENTERS[e], "Edition") end
+    end
+    add_cat("Edition", "Editions", eds)
+    local seals = arr()
+    local base = G.P_CENTERS.c_base
+    VR.state_atlases.centers = true
+    for _, s in ipairs(G.P_CENTER_POOLS.Seal or {}) do
+        local disc = true -- (the game's own seal page always shows all four)
+        local it = { key = s.key, set = "Seal", disc = disc, unl = true, ca = "centers",
+                     cp = arr({ num(base.pos.x), num(base.pos.y) }) }
+        it.name = disc and coll_name("Other", string.lower(s.key) .. "_seal") or "?????"
+        local sp = G.shared_seals and G.shared_seals[s.key] -- (seals have no pos of their own: the shared sprite)
+        local spos = sp and sp.sprite_pos
+        if disc and spos then it.ov = arr({ { a = "centers", p = arr({ num(spos.x), num(spos.y) }) } }) end
+        seals[#seals + 1] = it
+    end
+    add_cat("Seal", "Seals", seals)
+    local packs = arr()
+    for _, center in ipairs(G.P_CENTER_POOLS.Booster or {}) do packs[#packs + 1] = coll_center(center, "Booster") end
+    add_cat("Booster", "Boosters", packs)
+    local tags = {}
+    for _, v in pairs(G.P_TAGS or {}) do tags[#tags + 1] = v end
+    table.sort(tags, function(a, b) return (a.order or 0) < (b.order or 0) end)
+    local tag_items = arr()
+    VR.state_atlases.tags = true
+    for _, v in ipairs(tags) do
+        local disc = v.discovered and true or false
+        local pos = disc and v.pos or G.tag_undiscovered.pos
+        tag_items[#tag_items + 1] = { key = v.key, set = "Tag", disc = disc, unl = true, ca = "tags", round = true,
+            cp = arr({ num(pos.x), num(pos.y) }), name = disc and coll_name("Tag", v.key) or "?????" }
+    end
+    add_cat("Tag", "Tags", tag_items)
+    local blinds = {}
+    for _, v in pairs(G.P_BLINDS or {}) do blinds[#blinds + 1] = v end
+    table.sort(blinds, function(a, b) return (a.order or 0) < (b.order or 0) end)
+    local blind_items = arr()
+    VR.state_atlases.blind_chips = true
+    for _, v in ipairs(blinds) do
+        local disc = v.discovered and true or false
+        local pos = disc and v.pos or G.b_undiscovered.pos
+        blind_items[#blind_items + 1] = { key = v.key, set = "Blind", disc = disc, unl = true, ca = "blind_chips", round = true,
+            cp = arr({ 0, num(pos.y) }), name = disc and coll_name("Blind", v.key) or "?????" }
+    end
+    add_cat("Blind", "Blinds", blind_items)
+    return { cats = cats }
+end
+
+-- The description of one collection item, as the game would show it when hovering it there.
+local function collection_text(key, set)
+    if set == "Seal" then
+        local s = G.P_SEALS and G.P_SEALS[key]
+        local nodes = {}
+        localize({ type = "descriptions", set = "Other", key = string.lower(key) .. "_seal", nodes = nodes })
+        return loc_lines(nodes)
+    elseif set == "Tag" then
+        local v = G.P_TAGS[key]
+        local tag = Tag(key, true)
+        if not (v and v.discovered) then tag.hide_ability = true end
+        local holder = {}
+        tag:get_uibox_table(holder)
+        return loc_lines(holder.ability_UIBox_table and holder.ability_UIBox_table.main or {})
+    elseif set == "Blind" then
+        local v = G.P_BLINDS[key]
+        if not (v and v.discovered) then return "Defeat this blind to discover it" end
+        local vars = v.vars or {}
+        if v.name == "The Ox" then vars = { localize("ph_most_played") } end
+        local lines = localize({ type = "raw_descriptions", key = key, set = "Blind", vars = vars }) or {}
+        local out = {}
+        for _, l in ipairs(type(lines) == "table" and lines or {}) do out[#out + 1] = tostring(l) end
+        if v.mult then out[#out + 1] = "Score: " .. tostring(v.mult) .. "x base" end
+        if v.dollars then out[#out + 1] = "Reward: " .. string.rep("$", v.dollars) end
+        return table.concat(out, "\n")
+    end
+    local c = G.P_CENTERS[key]
+    if not c then return "" end
+    if set == "Back" then
+        local ok, text = pcall(function() return definition_text(Back(c):generate_UI()) end)
+        return ok and text or ""
+    end
+    local front = (set == "Enhanced" or set == "Edition") and G.P_CARDS.empty or nil
+    local card = Card(0, 0, G.CARD_W, G.CARD_H, front, c)
+    if set == "Edition" and c.discovered then
+        pcall(function() card:set_edition({ [string.sub(key, 3)] = true }, true, true) end)
+    end
+    local ok, ui = pcall(function() return card:generate_UIBox_ability_table() end)
+    local text = (ok and ui and ui.main) and loc_lines(ui.main) or ""
+    card:remove()
+    return text
+end
+
+HANDLERS.collection = { gated = false, fn = function(m)
+    if m.action == "open" then
+        local ok, data = pcall(collection_data)
+        if not ok then log("collection: " .. tostring(data)) return false end
+        send("collection", encode(data))
+        return true
+    elseif m.action == "info" and type(m.key) == "string" then
+        local ok, text = pcall(collection_text, m.key, tostring(m.set or ""))
+        if not ok then log("collection info: " .. tostring(text)) text = "" end
+        send("collection_info", encode({ key = m.key, text = text }))
+        return true
+    elseif m.action == "stats" then -- Stats -> Card Stats: the columns around you
+        if G.STAGE ~= G.STAGES.MAIN_MENU then return false end
+        G.FUNCS.usage()
+        return true
+    end
+    return false
+end }
+
+-- A key of VR's keyboard: typed into the text box on screen (hooked first, as a click on it would).
+HANDLERS.text_key = { gated = false, fn = function(m)
+    local e = VR.text_box
+    if not (e and VR.text_box_t and love.timer.getTime() - VR.text_box_t < 0.5) or type(m.key) ~= "string" then return false end
+    if G.CONTROLLER.text_input_hook ~= e then
+        -- hooked the way a click on the box does it (Steamodded also needs the box's id then)
+        local box = e.parent and e.parent.parent
+        if not (box and box.children and box.children[1] and box.children[1].children[1] == e) then return false end
+        G.FUNCS.select_text_input(box)
+    end
+    local args = e.config.ref_table
+    if m.key == "0" and args.extended_corpus then
+        -- a real 0 in a name (the game would turn it into an "o"; seeds keep that rule)
+        local t = args.text
+        TRANSPOSE_TEXT_INPUT(0)
+        if string.len(t.ref_table[t.ref_value] or "") < (args.max_length or 16) then
+            MODIFY_TEXT_INPUT({ letter = "0", text_table = t, pos = t.current_position + 1 })
+            TRANSPOSE_TEXT_INPUT(1)
+        end
+        return true
+    end
+    G.FUNCS.text_input_key({ key = m.key, caps = m.caps and true or false })
+    return true
+end }
+
+-- The VR menu's "Run Info" and "Game Options" (the run panel with these buttons isn't shown in VR)
+HANDLERS.game_menu = { gated = true, fn = function(m)
+    if m.action == "run_info" then
+        if G.STAGE ~= G.STAGES.RUN then return false end
+        G.FUNCS.run_info()
+        return true
+    elseif m.action == "options" then
+        G.FUNCS.options()
+        return true
+    end
+    return false
+end }
+
 HANDLERS.open_pack = { gated = false, fn = function() return release_pack() end }
+
+-- The Wheel of Fortune card in VR: a little wheel of fortune is spun first ("VR: Wheel of Fortune"):
+--   Real:          the wheel decides. The card's effect waits until the wheel has stopped; then the
+--                  game's own roll (pseudorandom 'wheel_of_fortune') is answered with the wheel's
+--                  result. The wheel has as many WIN! fields as the chance (2 of 8 = 1 in 4).
+--   Deterministic: the game's roll decides as always (a seeded run stays the same): it is looked at
+--                  beforehand without using it up (the random state is put back), so the wheel can
+--                  stop on the right kind of field; the effect waits behind a blocking event.
+--   Off:           the card works at once, like in the game.
+-- Without a VR client, or WHEEL_TIMEOUT seconds without an answer, the game's own roll decides.
+local WHEEL_TIMEOUT = 60
+VR.force_wheel = nil -- true / false: the next 'wheel_of_fortune' roll wins / loses (Real)
+local pseudorandom_ref = pseudorandom
+function pseudorandom(seed, min, max)
+    if seed == "wheel_of_fortune" and VR.force_wheel ~= nil and not min then
+        local win = VR.force_wheel
+        VR.force_wheel = nil
+        pseudorandom_ref(seed) -- (the seed stream moves on as if rolled)
+        return win and 0 or 1
+    end
+    return pseudorandom_ref(seed, min, max)
+end
+
+local card_use_consumeable_ref = Card.use_consumeable
+function Card:use_consumeable(area, copier)
+    local mode = VR.wheel_mode
+    local chance = self.ability and self.ability.name == "The Wheel of Fortune" and
+        G.GAME.probabilities.normal / self.ability.extra
+    if not chance or chance >= 1 or mode == "Off" or NET.state ~= "connected" then
+        return card_use_consumeable_ref(self, area, copier)
+    end
+    local real = mode ~= "Deterministic"
+    local win = false
+    if not real then
+        local key = "wheel_of_fortune"
+        local saved = G.GAME.pseudorandom[key]
+        win = pseudorandom_ref(key) < chance
+        G.GAME.pseudorandom[key] = saved -- (the real roll in the original below gives the same number)
+    end
+    local w = { done = false }
+    VR.wheel = w
+    G.E_MANAGER:add_event(Event({ func = function()
+        w.since = love.timer.getTime()
+        VR.send_event("wheel", { win = win, chance = chance, real = real })
+        return true
+    end }))
+    G.E_MANAGER:add_event(Event({ func = function()
+        return w.done or NET.state ~= "connected" or love.timer.getTime() - (w.since or 0) > WHEEL_TIMEOUT
+    end }))
+    if not real then
+        return card_use_consumeable_ref(self, area, copier)
+    end
+    -- Real: the card's effect only once the wheel has stopped, with the wheel's result
+    G.E_MANAGER:add_event(Event({ func = function()
+        if w.win ~= nil then VR.force_wheel = w.win end
+        card_use_consumeable_ref(self, area, copier)
+        VR.force_wheel = nil
+        return true
+    end }))
+end
+
+HANDLERS.wheel_done = { gated = false, fn = function(m)
+    if not VR.wheel then return false end
+    if m.win ~= nil then VR.wheel.win = (m.win == true or m.win == "true") end
+    VR.wheel.done = true
+    VR.wheel = nil
+    return true
+end }
 
 -- Reroll lever on the VR joker board
 HANDLERS.reroll = { gated = true, fn = function()
@@ -1570,6 +2438,15 @@ HANDLERS.buy = { gated = true, fn = function(m)
     if area ~= G.shop_jokers and area ~= G.shop_vouchers and area ~= G.shop_booster then return false end
     local cost = card.cost or 0
     if cost > 0 and cost > (G.GAME.dollars or 0) - (G.GAME.bankrupt_at or 0) then return false end
+    -- "buy and use" (m.use): a tarot / planet / spectral card dropped on the card hand or thrown up
+    -- straight from the counter. Only when the game's own BUY AND USE button would be there.
+    if m.use then
+        if area ~= G.shop_jokers or not (card.ability and card.ability.consumeable) then return false end
+        local ok, usable = pcall(function() return card:can_use_consumeable() end)
+        if not (ok and usable) then return false end
+        G.FUNCS.buy_from_shop({ config = { ref_table = card, id = 'buy_and_use' } })
+        return true
+    end
     if area == G.shop_jokers then
         return G.FUNCS.buy_from_shop({ config = { ref_table = card } }) ~= false
     end
@@ -1648,7 +2525,9 @@ end
 
 -- The casino in VR plays some of the game's sounds by itself (coins of a slot machine payout,
 -- chips at the side tables): sent right after connecting, one per frame, before they are needed.
-local AMBIENT_SOUNDS = { "coin1", "coin2", "coin3", "coin4", "coin5", "coin6", "coin7", "chips1", "chips2" }
+local AMBIENT_SOUNDS = { "coin1", "coin2", "coin3", "coin4", "coin5", "coin6", "coin7", "chips1", "chips2",
+                         -- (Solatro, which runs in VR alone: its cards' sounds)
+                         "cardSlide1", "card1", "multhit1", "whoosh1" }
 function VR.send_ambient_sounds()
     if NET.state ~= "connected" then return end
     for _, code in ipairs(AMBIENT_SOUNDS) do

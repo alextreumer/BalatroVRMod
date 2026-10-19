@@ -12,6 +12,12 @@ extends Node3D
 ##   The Wheel     every machine in the room runs wild
 ##   The Manacle   chains hang from the walls
 ##   The Serpent   a glowing serpent winds over the ceiling
+## and the showdown bosses of ante 8 (see the end of this file):
+##   Amber Acorn   acorns rain from the ceiling
+##   Verdant Leaf  leaves whirl down through the room
+##   Violet Vessel a chalice over the table fills with violet as your score nears the target
+##   Crimson Heart a heart over the table beats, the room's light beats with it
+##   Cerulean Bell a big blue bell hangs over the table and swings
 ## (The Ox shakes your coin pile and The Tooth takes a coin per card – both done in main.gd.)
 ## Calm Lights: only the calm ones stay (walls, darkness, chains, eye, mouth), no wave light,
 ## bubbles or racing machines.
@@ -42,6 +48,7 @@ func _ready() -> void:
 	_build_chains()
 	_build_snake()
 	_build_wall_ring()
+	_build_showdown()
 	_show("")
 
 
@@ -66,6 +73,7 @@ func _show(key: String) -> void:
 	_ring.visible = key == "bl_wall"
 	for s in _snake:
 		s.visible = key == "bl_serpent"
+	_show_showdown(key)
 	room.set_boss_effects(
 		1.0,                                                                  # room size (unused now)
 		0.85 if key == "bl_needle" else (0.5 if key == "bl_flint" else 0.0),  # darkness
@@ -92,6 +100,7 @@ func _process(delta: float) -> void:
 		if eyes.is_valid():
 			centre = centre.lerp(eyes.call(), 0.5)
 		_ring.global_position = Vector3(centre.x, -RING_HEIGHT * 0.5 + RING_HEIGHT * r, centre.z)
+	_animate_showdown(delta)
 	if _snake[0].visible: # the serpent winds along a slow loop over the ceiling
 		for i in _snake.size():
 			var t := _time * 0.35 - i * 0.018
@@ -345,3 +354,277 @@ void fragment() {
 	ALPHA = c.a;
 }
 """
+
+
+# ---------------------------------------------------------------- the showdown bosses (ante 8)
+# Amber Acorn: acorns rain down. Verdant Leaf: leaves whirl through the room. Violet Vessel: a big
+# chalice over the table fills with glowing violet as your score nears its huge target. Crimson
+# Heart: a heart over the table beats, and the room's light beats with it. Cerulean Bell: a big
+# blue bell hangs over the table and swings. (Calm Lights: no rain, no whirl, no beat, no swing.)
+
+const OVER_TABLE := 1.05            # height above the table of the vessel, heart and bell
+
+var vessel_fill := 0.0              # set by main.gd: score / target of the blind (Violet Vessel)
+var _acorns: CPUParticles3D
+var _leaves: CPUParticles3D
+var _vessel: Node3D
+var _vessel_liquid: MeshInstance3D
+var _vessel_level := 0.0
+var _heart: Node3D
+
+
+## Where the Crimson Heart is (its middle), or null when it isn't there: the joker bolts start there.
+func heart_point():
+	if _heart == null or not _heart.is_visible_in_tree():
+		return null
+	return _heart.global_position + _heart.global_basis.y * 0.03
+var _bell: Node3D
+var _bell_clapper: Node3D
+
+
+func _build_showdown() -> void:
+	# Amber Acorn: little acorns falling from the ceiling
+	var acorn := _acorn_mesh()
+	_acorns = _rain(acorn, 160, 5.0, Vector3(0, -0.6, 0), 0.0)
+	_acorns.scale_amount_min = 1.4
+	_acorns.scale_amount_max = 2.2
+	_acorns.angular_velocity_min = -90.0 # (tumbling as they fall)
+	_acorns.angular_velocity_max = 90.0
+	# Verdant Leaf: leaves drifting and whirling down
+	var leaf := QuadMesh.new()
+	leaf.size = Vector2(0.1, 0.066)
+	var lm := StandardMaterial3D.new()
+	lm.albedo_texture = _leaf_texture()
+	lm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	lm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	lm.vertex_color_use_as_albedo = true
+	lm.emission_enabled = true # (lit a little from inside: visible in the dark casino)
+	lm.emission = Color(0.2, 0.45, 0.15)
+	leaf.material = lm
+	_leaves = _rain(leaf, 260, 9.0, Vector3(0.15, -0.3, 0.05), 3.0)
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(0.35, 0.85, 0.3))
+	ramp.set_color(1, Color(0.75, 0.8, 0.2))
+	_leaves.color_initial_ramp = ramp
+	_leaves.angular_velocity_min = -180.0
+	_leaves.angular_velocity_max = 180.0
+	_leaves.angle_min = 0.0
+	_leaves.angle_max = 360.0
+	# Violet Vessel: a chalice of gold and violet glass
+	_vessel = Node3D.new()
+	add_child(_vessel)
+	var gold := _sd_mat(Color(0.9, 0.68, 0.28), 0.3, 0.8)
+	_sd_cyl(_vessel, 0.16, 0.18, 0.04, Vector3(0, -0.36, 0), gold)            # foot
+	_sd_cyl(_vessel, 0.035, 0.05, 0.22, Vector3(0, -0.23, 0), gold)          # stem
+	_sd_sphere(_vessel, 0.07, Vector3(0, -0.2, 0), gold)                     # knot
+	var glass := _sd_mat(Color(0.55, 0.25, 0.85, 0.35), 0.05, 0.0)
+	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_sd_cyl(_vessel, 0.34, 0.12, 0.36, Vector3(0, 0.06, 0), glass)           # the cup
+	_sd_torus(_vessel, 0.33, 0.36, Vector3(0, 0.24, 0), gold)                # its golden rim
+	var liquid := _sd_mat(Color(0.7, 0.2, 1.0), 0.2, 0.0)
+	liquid.emission_enabled = true
+	liquid.emission = Color(0.7, 0.2, 1.0)
+	liquid.emission_energy_multiplier = 1.8
+	var holder := Node3D.new()
+	holder.position.y = -0.12 # (the liquid grows up from the cup's bottom)
+	_vessel.add_child(holder)
+	_vessel_liquid = _sd_cyl(holder, 0.12, 0.112, 0.002, Vector3(0, 0.001, 0), liquid)
+	_vessel_liquid.mesh = (_vessel_liquid.mesh as CylinderMesh).duplicate() # (its own: reshaped as it fills)
+	# Crimson Heart: a heart of two round lobes and a point
+	_heart = Node3D.new()
+	add_child(_heart)
+	var red := _sd_mat(Color(0.9, 0.06, 0.12), 0.35, 0.1)
+	red.emission_enabled = true
+	red.emission = Color(1.0, 0.05, 0.12)
+	red.emission_energy_multiplier = 0.8
+	for side in [-1.0, 1.0]:
+		_sd_sphere(_heart, 0.17, Vector3(side * 0.12, 0.06, 0), red)
+	var point := MeshInstance3D.new()
+	var pb := BoxMesh.new()
+	pb.size = Vector3(0.24, 0.24, 0.2)
+	point.mesh = pb
+	point.material_override = red
+	point.rotation_degrees.z = 45.0
+	point.position.y = -0.07
+	_heart.add_child(point)
+	# Cerulean Bell: a big blue bell on a chain from the ceiling, with its clapper
+	_bell = Node3D.new()
+	add_child(_bell)
+	var blue := _sd_mat(Color(0.2, 0.5, 1.0), 0.25, 0.7)
+	blue.emission_enabled = true
+	blue.emission = Color(0.15, 0.4, 1.0)
+	blue.emission_energy_multiplier = 0.35
+	_sd_cyl(_bell, 0.12, 0.3, 0.38, Vector3(0, -0.25, 0), blue)             # the bell's body
+	_sd_sphere(_bell, 0.12, Vector3(0, -0.06, 0), blue)                      # its crown
+	_sd_torus(_bell, 0.29, 0.33, Vector3(0, -0.44, 0), _sd_mat(Color(0.9, 0.7, 0.3), 0.3, 0.8)) # lip
+	_sd_cyl(_bell, 0.012, 0.012, 1.4, Vector3(0, 0.66, 0), _sd_mat(Color(0.4, 0.4, 0.45), 0.4, 0.8)) # chain
+	_bell_clapper = Node3D.new()
+	_bell_clapper.position.y = -0.08
+	_bell.add_child(_bell_clapper)
+	_sd_cyl(_bell_clapper, 0.015, 0.015, 0.36, Vector3(0, -0.2, 0), _sd_mat(Color(0.3, 0.3, 0.35), 0.4, 0.8))
+	_sd_sphere(_bell_clapper, 0.06, Vector3(0, -0.4, 0), _sd_mat(Color(0.85, 0.65, 0.25), 0.3, 0.8))
+
+
+func _show_showdown(key: String) -> void:
+	_acorns.emitting = key == "bl_final_acorn" and not _calm
+	_leaves.emitting = key == "bl_final_leaf" and not _calm
+	_vessel.visible = key == "bl_final_vessel"
+	_heart.visible = key == "bl_final_heart"
+	_bell.visible = key == "bl_final_bell"
+
+
+func _animate_showdown(delta: float) -> void:
+	var over := room._table.global_position + Vector3(0, OVER_TABLE, 0)
+	var appear := _amount * _amount * (3.0 - 2.0 * _amount) # (comes down from the ceiling as the round starts)
+	var drop := Vector3(0, (1.0 - appear) * 1.2, 0)
+	if _vessel.visible: # stands on the table behind the joker board (comes down onto it)
+		_vessel.global_position = room._table.global_transform * Vector3(-0.4, 0.38, -0.45) + drop # (left of Jimbo across the table)
+		_vessel.rotation.y += delta * 0.2
+		# the liquid fills the cup from its narrow bottom: its surface is always as wide as the cup is
+		# at that height (the cup: 0.12 at the bottom, 0.34 at the top, 0.36 high)
+		_vessel_level = lerpf(_vessel_level, clampf(vessel_fill, 0.0, 1.0), 1.0 - exp(-2.0 * delta))
+		var h := maxf(0.34 * _vessel_level, 0.002)
+		var m := _vessel_liquid.mesh as CylinderMesh
+		m.height = h
+		m.bottom_radius = 0.112
+		m.top_radius = 0.12 + 0.22 * h / 0.36 - 0.008
+		_vessel_liquid.position.y = h * 0.5
+	if _heart.visible:
+		_heart.global_position = over + drop
+		var beat := 0.0
+		if not _calm: # two quick beats a second, like a pulse
+			var t := fmod(_time * 1.2, 1.0)
+			beat = maxf(exp(-pow((t - 0.05) * 18.0, 2.0)), 0.6 * exp(-pow((t - 0.25) * 18.0, 2.0)))
+		_heart.scale = Vector3.ONE * (1.0 + 0.12 * beat)
+		if eyes.is_valid(): # turned towards you
+			var to: Vector3 = eyes.call() - _heart.global_position
+			to.y = 0.0
+			if to.length() > 0.01:
+				_heart.global_basis = Basis.looking_at(-to.normalized()).scaled(_heart.scale)
+		room.set_boss_effects(1.0, 0.35 * beat, false) # the room's light beats with it
+	if _bell.visible:
+		_bell.global_position = over + drop + Vector3(0, 0.2, 0)
+		var swing := 0.0 if _calm else sin(_time * 1.6) * 0.18
+		_bell.rotation.z = swing
+		_bell_clapper.rotation.z = (0.0 if _calm else sin(_time * 1.6 - 0.6) * 0.35) # lagging behind: it strikes
+
+
+func _rain(mesh: Mesh, amount: int, life: float, gravity: Vector3, spin: float) -> CPUParticles3D:
+	var p := CPUParticles3D.new()
+	p.mesh = mesh
+	p.amount = amount
+	p.lifetime = life
+	p.preprocess = life
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	p.emission_box_extents = Vector3(CasinoRoom.ROOM_HALF.x - 0.3, 0.05, CasinoRoom.ROOM_HALF.y - 0.3)
+	p.position = Vector3(0, CasinoRoom.ROOM_HEIGHT - 0.1, CasinoRoom.ROOM_CENTER_Z)
+	p.direction = Vector3.DOWN
+	p.spread = 20.0
+	p.gravity = gravity
+	p.initial_velocity_min = 0.1
+	p.initial_velocity_max = 0.3
+	p.scale_amount_min = 0.7
+	p.scale_amount_max = 1.3
+	if spin > 0.0: # leaves sway from side to side as they fall
+		p.tangential_accel_min = -spin * 0.1
+		p.tangential_accel_max = spin * 0.1
+	p.emitting = false
+	add_child(p)
+	return p
+
+
+## An acorn: a brown nut with its cap.
+func _acorn_mesh() -> Mesh:
+	var st := SurfaceTool.new()
+	var nut := SphereMesh.new()
+	nut.radius = 0.022
+	nut.height = 0.055
+	nut.radial_segments = 10
+	nut.rings = 6
+	st.append_from(nut, 0, Transform3D(Basis(), Vector3(0, -0.012, 0)))
+	var cap := SphereMesh.new()
+	cap.radius = 0.025
+	cap.height = 0.025
+	cap.is_hemisphere = true
+	cap.radial_segments = 10
+	cap.rings = 4
+	st.append_from(cap, 0, Transform3D(Basis(), Vector3(0, 0.008, 0)))
+	var stem := CylinderMesh.new()
+	stem.top_radius = 0.003
+	stem.bottom_radius = 0.004
+	stem.height = 0.014
+	stem.radial_segments = 6
+	st.append_from(stem, 0, Transform3D(Basis(), Vector3(0, 0.028, 0)))
+	var m := st.commit()
+	var shell := _sd_mat(Color(0.75, 0.45, 0.15), 0.45, 0.1)
+	shell.emission_enabled = true # (a warm amber glow: visible in the dark casino)
+	shell.emission = Color(0.8, 0.45, 0.1)
+	shell.emission_energy_multiplier = 0.6
+	m.surface_set_material(0, shell)
+	return m
+
+
+## A leaf shape (pointed oval with a midrib) on a transparent texture.
+func _leaf_texture() -> ImageTexture:
+	var w := 48
+	var h := 32
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in h:
+		for x in w:
+			var u := (x + 0.5) / w * 2.0 - 1.0
+			var v := (y + 0.5) / h * 2.0 - 1.0
+			var inside := v * v < (1.0 - u * u) * (1.0 - u * u) * 0.95
+			var rib := absf(v) < 0.07 and absf(u) < 0.9
+			if inside:
+				img.set_pixel(x, y, Color(0.6, 0.85, 0.5) if rib else Color(1, 1, 1))
+			else:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+	return ImageTexture.create_from_image(img)
+
+
+func _sd_mat(c: Color, rough: float, metal: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = rough
+	m.metallic = metal
+	return m
+
+
+func _sd_cyl(parent: Node3D, top: float, bottom: float, h: float, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var c := CylinderMesh.new()
+	c.top_radius = top
+	c.bottom_radius = bottom
+	c.height = h
+	c.radial_segments = 32
+	mi.mesh = c
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+func _sd_sphere(parent: Node3D, r: float, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var s := SphereMesh.new()
+	s.radius = r
+	s.height = r * 2.0
+	mi.mesh = s
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+func _sd_torus(parent: Node3D, inner: float, outer: float, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var t := TorusMesh.new()
+	t.inner_radius = inner
+	t.outer_radius = outer
+	t.rings = 40
+	mi.mesh = t
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi

@@ -21,6 +21,10 @@ var hide_dimmers := false
 ## Outside of a round (shop, blind select, cash out, packs) the run panel only shows what matters
 ## there: money, ante, round and the Run Info / Options buttons.
 var compact_hud := false
+var hide_hud := false               # VR: no run panel at all (its parts are on the table: tower, stand, coins ...)
+var casino_skin := false            # VR: the game's grey panels in the casino's plum, big ones in a gold frame
+var _main_popup := {}               # this scene's first card tooltip (see _placement)
+var hide_main_menu := false         # VR main menu on the table: the game's own menu panel is not drawn
 const COMPACT_KEEP := "/row_round/"                      # lower block of the run panel
 const COMPACT_DROP := ["/hud_hands/", "/hud_discards/"]  # ... minus hands and discards
 ## Game boxes the VR client replaces with its own 3D version (SHOP sign + "Improve your run!")
@@ -101,9 +105,22 @@ func apply_scene(scene: Dictionary) -> void:
 		if role != "" and not role_rect.has(role):
 			role_rect[role] = g
 
+	_main_popup = {}
+	for gr in scene.get("groups", []): # the first tooltip that belongs to a card: the others line up with it
+		if str(gr.get("role", "")) == "popup" and gr.has("owner"):
+			_main_popup = gr
+			break
 	var containers := {}
 	var items: Array = scene.get("items", [])
 	var seen := {}
+	var title_cards := {} # VR main menu: the hidden title card - its tooltip ("Locked ...") goes too
+	if hide_main_menu:
+		for it in items:
+			if it.get("area", "") == "title_top":
+				title_cards[int(it.get("id", 0))] = true
+	# an overlay menu (options ...) open: the text of everything under it is not drawn - in VR the
+	# letters of the blind select etc. would shine through the menu's panels
+	var under_overlay := int(scene.get("overlay_from", 0)) if scene.get("overlay", false) else -1
 	for i in items.size():
 		var it: Dictionary = items[i]
 		var kind: String = it.get("k", "")
@@ -116,6 +133,13 @@ func apply_scene(scene: Dictionary) -> void:
 				or (kind == "c" and it.get("area", "") in ["jokers", "consumeables", "shop_jokers", "shop_vouchers", "shop_booster"])):
 			continue
 		if _hidden_in_compact(it, group_role):
+			continue
+		# VR main menu: the casino table is the menu (buzzer, stack, album ...); menus opened from it
+		# (options, collection, run setup) still show on the board
+		if hide_main_menu and (group_role in ["MAIN_MENU_UI", "logo", "PROFILE_BUTTON", "area:title_top"]
+				or it.get("area", "") == "title_top"
+				or (group_role == "popup" and (title_cards.has(int(group_info.get(gid, {}).get("owner", -1)))
+					or str(group_info.get(int(group_info.get(gid, {}).get("owner_group", -1)), {}).get("role", "")) == "area:title_top"))):
 			continue
 		if _off_screen(it):
 			continue
@@ -138,6 +162,10 @@ func apply_scene(scene: Dictionary) -> void:
 		elif v.get_parent() != container:
 			v.reparent(container, false)
 		_update_item(v, kind, it, i)
+		if i < under_overlay:
+			var text := v.get_node_or_null("Label") as Label3D
+			if text != null:
+				text.visible = false
 
 	for id in _visuals.keys():
 		if not seen.has(id):
@@ -172,6 +200,8 @@ func _off_screen(it: Dictionary) -> bool:
 
 func _hidden_in_compact(it: Dictionary, role: String) -> bool:
 	if REPLACED_ROLES.has(role):
+		return true
+	if hide_hud and (role == "HUD" or role == "HUD_blind"):
 		return true
 	if not compact_hud:
 		return false
@@ -208,11 +238,15 @@ func _container_for(gid: int, g: Dictionary, group_info: Dictionary, role_rect: 
 ## Returns [parent node, offset]: the offset moves the reference rect's center onto the parent's origin.
 func _placement(g: Dictionary, group_info: Dictionary, role_rect: Dictionary) -> Array:
 	var role := str(g.get("role", ""))
+	# a card's extra info boxes ("Polychrome", "Bonus Card", "The Hierophant" ...) keep their place
+	# beside its tooltip: every popup is placed relative to the tooltip of the card it belongs to
+	if role == "popup" and not g.has("owner") and not _main_popup.is_empty():
+		g = _main_popup
 	if role == "popup" and g.has("owner"):
 		if popup_anchor_for.is_valid():
 			var n = popup_anchor_for.call(int(g["owner"]))
 			if n != null:
-				return [n, -_center(g)]
+				return [n, -_center(_main_popup if not _main_popup.is_empty() and int(_main_popup.get("owner", -1)) == int(g["owner"]) else g)]
 		# the tooltip goes exactly where its card is drawn right now: same parent, same offset
 		# (the shop on the table, the board, a booster pack ...)
 		var owner_visual = _visuals.get(int(g["owner"]))
@@ -261,9 +295,15 @@ func _update_item(v: Node3D, kind: String, it: Dictionary, order: int) -> void:
 		"r":
 			var c = it.get("c")
 			var has_colour := c != null
-			_set_quad(v, size, to_color(c) if has_colour else Color(0, 0, 0, 0), has_colour)
+			var col := to_color(c) if has_colour else Color(0, 0, 0, 0)
+			var framed := false
+			if casino_skin and has_colour and _is_grey(col):
+				framed = w >= 3.0 and h >= 2.5 and col.a > 0.5 # a whole panel (menu, blind, run info)
+				col = _plum(col)
+			_set_quad(v, size, col, has_colour)
+			_set_rim(v, size, framed)
 			_set_label(v, "", size.y, size.x, Color.WHITE)
-			_set_body(v, clickable, size, id, "ui", "")
+			_set_body(v, clickable, size, id, "slider" if it.get("sl", false) else "ui", "") # (a slider track: dragged with the beam)
 		"t":
 			_set_quad(v, size, Color.WHITE, false)
 			var text_col := to_color(it.get("c"))
@@ -354,7 +394,7 @@ func _set_letters(v: Node3D, id: int, text: String, height: float, colour: Color
 
 	var font := _letter_font()
 	if box.get_meta("built_text", "") != text or box.get_meta("built_height", 0.0) != height \
-			or box.get_meta("built_font", null) != font:
+			or (box.get_meta("built_font") if box.has_meta("built_font") else null) != font:
 		for child in box.get_children():
 			child.queue_free()
 			box.remove_child(child)
@@ -470,6 +510,36 @@ func _text_sorting(label: Label3D) -> void:
 	label.alpha_cut = Label3D.ALPHA_CUT_DISCARD if opaque_mode else Label3D.ALPHA_CUT_OPAQUE_PREPASS
 	label.render_priority = 10
 	label.outline_render_priority = 9
+
+
+## The game's neutral panel greys (not the coloured buttons, not white text boxes or black shadows).
+static func _is_grey(c: Color) -> bool:
+	var hi := maxf(c.r, maxf(c.g, c.b))
+	var lo := minf(c.r, minf(c.g, c.b))
+	var l := (c.r + c.g + c.b) / 3.0
+	return hi - lo < 0.13 and l > 0.15 and l < 0.62
+
+
+## Grey -> the casino's plum, as light or dark as the grey was.
+static func _plum(c: Color) -> Color:
+	var l := (c.r + c.g + c.b) / 3.0
+	return Color(l * 0.8, l * 0.32, l * 0.6, c.a)
+
+
+## A thin gold frame around a whole panel, just behind it.
+func _set_rim(v: Node3D, size: Vector2, on: bool) -> void:
+	var rim: MeshInstance3D = v.get_node_or_null("Rim")
+	if not on:
+		if rim != null:
+			rim.visible = false
+		return
+	if rim == null:
+		rim = _make_quad(Color(0.9, 0.66, 0.26))
+		rim.name = "Rim"
+		rim.position.z = -Z_STEP * 0.5
+		v.add_child(rim)
+	rim.visible = true
+	rim.scale = Vector3(size.x + 0.008, size.y + 0.008, 1.0)
 
 
 func _surface(c: Color) -> Color:

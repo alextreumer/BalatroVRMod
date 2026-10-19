@@ -13,6 +13,7 @@ const WHITE := Color(0.97, 0.96, 0.93)
 const RED := Color(0.85, 0.12, 0.15)
 const BLUE := Color(0.15, 0.3, 0.85)
 const GOLD := Color(0.95, 0.75, 0.25)
+var _glove: StandardMaterial3D
 
 ## per finger: [z position at the knuckle, segment lengths]
 const FINGERS := [
@@ -71,6 +72,19 @@ func _process(delta: float) -> void:
 
 
 ## +1 for the left hand, -1 for the right (everything is mirrored along X).
+## Achievement rewards for the gloves: "white" (normal), "gold" (Pack Rat), "split" (Ambidextrous:
+## the left one red, the right one blue, like Jimbo's suit), "neon" (Hand Model: they glow).
+func set_style(style: String, metal := Color(0, 0, 0, 0)) -> void:
+	if _glove == null:
+		return
+	_glove.albedo_color = {"gold": metal if metal.a > 0.0 else GOLD, "split": RED if left else BLUE, "neon": Color(0.1, 0.12, 0.14)}.get(style, WHITE)
+	_glove.metallic = 0.75 if style == "gold" else 0.0
+	_glove.roughness = 0.3 if style == "gold" else 0.55
+	_glove.emission_enabled = style == "neon"
+	_glove.emission = Color(1.0, 0.25, 0.8) if left else Color(0.2, 0.95, 1.0)
+	_glove.emission_energy_multiplier = 1.4
+
+
 func _side() -> float:
 	return 1.0 if left else -1.0
 
@@ -78,6 +92,7 @@ func _side() -> float:
 func _build() -> void:
 	var s := _side()
 	var glove := _mat(WHITE, 0.55)
+	_glove = glove
 	# palm: a puffy cartoon shape on the outer side of the handle, from the wrist to the knuckles
 	_ellipsoid(self, Vector3(-0.029 * s, 0.032, 0.0), Vector3(0.034, 0.085, 0.09), glove)
 	# back-of-hand seams, like on Jimbo's gloves

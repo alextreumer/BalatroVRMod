@@ -22,6 +22,35 @@ const LINES := {
 	"sad": ["Oh no...", "We'll get them next time.", "That hurts."],
 	"win": ["We did it!!", "Champion!", "Unbelievable run!"],
 	"reroll": ["Spin it!", "Again!"],
+	"laugh": ["HA HA HA!", "Joke's on you!", "Hehehe!", "Unlucky!"],
+	# the chatty ones (said now and then, see react's chance)
+	"discard": ["Bye bye!", "Into the bin!", "Good riddance.", "Wasn't feeling those either.", "Yeet!", "Safe Travels!"],
+	"last_discard": ["That was the last discard...", "No more discards. Choose wisely!"],
+	"square_hole": ["It goes in the square hole!"], # (the SELL / DISCARD box)
+	"sell": ["Sold! No hard feelings.", "Cha-ching!", "Farewell, old friend.", "One less mouth to feed."],
+	"buy_joker": ["Ooh, a new friend!", "Welcome to the table!", "Nice pick!", "Another clown? I love it."],
+	"boss": ["Uh oh... a boss.", "Here comes trouble.", "Stay sharp now!", "This one looks mean."],
+	"last_hand": ["Last hand. Make it count!", "All or nothing!", "No pressure... ha.", "I can't watch!"],
+	"idle": ["Take your time... I'll wait.", "Thinking hard, huh?", "Hello? Anybody there?", "*yawn*", "Psst, play something!"],
+	"planet": ["To the stars!", "Level up!", "Ooh, shiny planet!"],
+	"glass": ["Oops, butterfingers!", "Crash!", "That was fragile..."],
+	"wheel_win": ["Lucky you!", "The wheel loves you!", "Jackpot!"],
+	"wheel_nope": ["Nope!", "Haha, NOPE!", "Better luck next spin."],
+	"photo": ["Say cheese!", "Get my good side!", "Smile!", "Ooh, a photo!"],
+	"money": ["Look at all that money!", "We're rich!", "Big spender, huh?"],
+	"broke": ["Empty pockets...", "We're broke!", "Who needs money anyway?"],
+	"hand_High Card": ["A High Card? Bold.", "High Card... really?", "Living dangerously!"],
+	"hand_Pair": ["A pair. Classic.", "Two of a kind!"],
+	"hand_Two Pair": ["Two pairs, double fun!", "Two Pair, nice."],
+	"hand_Three of a Kind": ["Three of a kind!", "Trips!"],
+	"hand_Straight": ["Straight as an arrow!", "Look at that ladder!"],
+	"hand_Flush": ["Flushed it!", "All one suit, fancy!"],
+	"hand_Full House": ["Full House! Party time!", "The house is full!"],
+	"hand_Four of a Kind": ["FOUR of a kind?!", "Quads! Wow!"],
+	"hand_Straight Flush": ["A STRAIGHT FLUSH!", "I've never seen that before!"],
+	"hand_Five of a Kind": ["FIVE of a kind?! Cheater!", "That's not even legal!"],
+	"hand_Flush House": ["A Flush House! Amazing!"],
+	"hand_Flush Five": ["FLUSH FIVE! I need to sit down."],
 }
 
 
@@ -52,7 +81,64 @@ func _ready() -> void:
 
 
 ## React to something: "cheer", "won_blind", "pack", "sad", "win", "reroll".
-func react(what: String) -> void:
+## Achievement reward "UnderTheVRadar": Jimbo wears a little VR headset.
+func set_goggles(on: bool) -> void:
+	if _figure == null:
+		return
+	var g := _figure.get_node_or_null("Goggles") as Node3D
+	if on and g == null:
+		g = Node3D.new()
+		g.name = "Goggles"
+		g.position = Vector3(0, 0.089, 0.0)
+		_figure.add_child(g)
+		var shell := StandardMaterial3D.new()
+		shell.albedo_color = Color(0.92, 0.92, 0.95)
+		shell.roughness = 0.35
+		var box := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.03, 0.013, 0.011)
+		box.mesh = bm
+		box.position.z = 0.0155
+		box.material_override = shell
+		g.add_child(box)
+		var visor := StandardMaterial3D.new()
+		visor.albedo_color = Color(0.05, 0.05, 0.08)
+		visor.metallic = 0.6
+		visor.roughness = 0.1
+		var front := MeshInstance3D.new()
+		var fm := BoxMesh.new()
+		fm.size = Vector3(0.027, 0.0105, 0.001)
+		front.mesh = fm
+		front.position.z = 0.0212
+		front.material_override = visor
+		g.add_child(front)
+		var strap := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.0145
+		tm.outer_radius = 0.0165
+		strap.mesh = tm
+		strap.material_override = visor
+		g.add_child(strap)
+		var light := StandardMaterial3D.new() # a little green status light
+		light.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		light.albedo_color = Color(0.3, 1.6, 0.5)
+		var led := MeshInstance3D.new()
+		var lm := SphereMesh.new()
+		lm.radius = 0.0012
+		lm.height = 0.0024
+		led.mesh = lm
+		led.position = Vector3(0.011, 0.003, 0.0218)
+		led.material_override = light
+		g.add_child(led)
+	if g != null:
+		g.visible = on
+
+
+## what: the mood / line to show; chance < 1: a chatty line that only comes now and then (and never
+## over a line still showing).
+func react(what: String, chance := 1.0) -> void:
+	if chance < 1.0 and (randf() > chance or _bubble_time > 0.0):
+		return
 	match what:
 		"sad":
 			_mood = "sad"

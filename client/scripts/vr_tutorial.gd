@@ -1,7 +1,7 @@
 class_name VRTutorial
 extends Node3D
 ## Jimbo's tips: a small board floating in front of you on the very first start in VR (and again
-## from the game's Options menu, "VR: Show Tips"). A few pages on the gestures; "Next" and "Skip"
+## from the game's Options menu, "VR: How To Play"). A few pages on the gestures; "Next" and "Skip"
 ## are clicked with the beam like everything else.
 
 signal finished
@@ -46,7 +46,10 @@ func _build() -> void:
 	rim.material_override = rm
 	rim.position.z = -0.004
 	add_child(rim)
-	_title = _label(48, 0.001, Color(1.0, 0.8, 0.3), Vector3(0, SIZE.y * 0.5 - 0.035, 0.006))
+	_title = _label(48, 0.001, Color(1.0, 0.8, 0.3), Vector3(0, SIZE.y * 0.5 - 0.016, 0.006))
+	_title.width = (SIZE.x - 0.06) / _title.pixel_size # a long title wraps onto a second line
+	_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_title.vertical_alignment = VERTICAL_ALIGNMENT_TOP # (it grows downwards from the top edge)
 	_text = _label(32, 0.00072, Color(0.95, 0.95, 0.95), Vector3(0, -0.005, 0.006))
 	_text.width = (SIZE.x - 0.06) / _text.pixel_size
 	_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -115,6 +118,7 @@ func _show() -> void:
 	visible = true
 	var p: Array = _pages[_page]
 	_title.text = p[0]
+	_title.font_size = 48 if str(p[0]).length() <= 24 else 34 # a long title a little smaller
 	_text.text = p[1]
 	var dots := ""
 	for i in _pages.size():

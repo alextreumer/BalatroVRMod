@@ -10,6 +10,11 @@ static var _materials := {}   # "name|x|y" -> StandardMaterial3D
 static var _quad: QuadMesh
 
 
+## Has that texture atlas arrived from the game yet?
+static func has_atlas(name) -> bool:
+	return _atlases.has(str(name))
+
+
 static func add_atlas(data: Dictionary) -> void:
 	var name := str(data.get("name", ""))
 	var img := Image.new()
@@ -27,6 +32,9 @@ static func add_atlas(data: Dictionary) -> void:
 	for key in _materials.keys():
 		if key.begins_with(name + "|"):
 			_materials.erase(key)
+	for key in _cropped.keys():
+		if key.begins_with(name + "|"):
+			_cropped.erase(key)
 	for key in _debuff_materials.keys():
 		if key.begins_with(name + "|"):
 			_debuff_materials.erase(key)
@@ -68,6 +76,44 @@ static func material(name, pos, blend := false) -> StandardMaterial3D:
 	mat.uv1_offset = Vector3(x * cell.x / size.x, y * cell.y / size.y, 0)
 	_materials[key] = mat
 	return mat
+
+
+## Only the drawn part of a cell (a sticker is a small picture in a card-sized cell): a material showing
+## just that, and its width / height. Null until the atlas has arrived; cached per cell.
+static var _cropped := {}
+
+
+static func cropped_material(name, pos) -> Array:
+	if name == null or not (pos is Array) or pos.size() < 2 or not _atlases.has(str(name)):
+		return []
+	var key := "%s|%d|%d" % [name, int(pos[0]), int(pos[1])]
+	if _cropped.has(key):
+		return _cropped[key]
+	var atlas: Dictionary = _atlases[str(name)]
+	var cell: Vector2 = atlas["cell"]
+	var size: Vector2 = atlas["size"]
+	var img := (atlas["tex"] as ImageTexture).get_image()
+	var cx := int(pos[0] * cell.x)
+	var cy := int(pos[1] * cell.y)
+	var x0 := int(cell.x); var y0 := int(cell.y); var x1 := -1; var y1 := -1
+	for y in int(cell.y):
+		for x in int(cell.x):
+			if cx + x < img.get_width() and cy + y < img.get_height() and img.get_pixel(cx + x, cy + y).a > 0.3:
+				x0 = mini(x0, x); y0 = mini(y0, y); x1 = maxi(x1, x); y1 = maxi(y1, y)
+	if x1 < 0:
+		return []
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_texture = atlas["tex"]
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST_WITH_MIPMAPS
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.5
+	var w := x1 - x0 + 1
+	var h := y1 - y0 + 1
+	mat.uv1_scale = Vector3(w / size.x, h / size.y, 1)
+	mat.uv1_offset = Vector3((cx + x0) / size.x, (cy + y0) / size.y, 0)
+	_cropped[key] = [mat, float(w) / float(h)]
+	return _cropped[key]
 
 
 ## Materials to draw for a card item, bottom to top. Empty if the textures are not there (yet).
@@ -133,6 +179,7 @@ uniform vec2 b_scale;
 uniform bool has_b = false;
 uniform int mode = 0; // 1 foil, 2 holo, 3 polychrome, 4 negative
 uniform float seed = 0.0;
+uniform float strength = 1.0; // how strong the effect shows (the shop counter asks for more)
 
 vec3 hue_shift(vec3 c, float h) {
 	mat3 to_yiq = mat3(vec3(0.299, 0.596, 0.211), vec3(0.587, -0.274, -0.523), vec3(0.114, -0.322, 0.312));
@@ -153,17 +200,20 @@ void fragment() {
 	if (c.a < 0.5) discard; // rounded card corners
 	float t = TIME * 0.6 + seed;
 	vec3 col = c.rgb;
-	if (mode == 1) { // foil: cool blue sheen with bright bands sweeping across
+	if (mode == 1) { // foil: cold silver-blue metal, bright bands sweeping diagonally across
+		float grey = dot(col, vec3(0.299, 0.587, 0.114));
 		float band = sin((UV.x * 1.2 + UV.y) * 9.0 - t * 2.0) * 0.5 + 0.5;
-		col = mix(col, col * vec3(0.72, 0.85, 1.12), 0.6) + vec3(0.22, 0.32, 0.55) * pow(band, 3.0);
-	} else if (mode == 2) { // holo: a red and blue glinting grid that sweeps over the card
-		float grid = max(sin(UV.x * 42.0 + t) * sin(UV.y * 32.0 - t * 1.3), 0.0);
+		col = mix(col, vec3(grey) * vec3(0.62, 0.82, 1.25), clamp(0.7 * strength, 0.0, 1.0))
+				+ vec3(0.35, 0.5, 0.9) * pow(band, 4.0) * strength;
+	} else if (mode == 2) { // holo: a clear pink-red tint and a fine glinting grid of red and violet sparkles
+		float g = pow(max(sin(UV.x * 60.0 + t) * sin(UV.y * 46.0 - t * 1.3), 0.0), 2.0);
 		float sweep = sin((UV.x - UV.y) * 6.0 + t * 1.5) * 0.5 + 0.5;
-		col = col * vec3(1.05, 0.9, 0.95) + vec3(0.5, 0.12, 0.3) * grid * sweep + vec3(0.08, 0.15, 0.45) * (1.0 - sweep) * 0.5;
+		col = mix(col, col * vec3(1.25, 0.7, 0.95), clamp(0.65 * strength, 0.0, 1.0))
+				+ (vec3(1.0, 0.25, 0.55) * g * (0.35 + sweep) + vec3(0.25, 0.1, 0.55) * (1.0 - sweep) * 0.4) * strength;
 	} else if (mode == 3) { // polychrome: colours drift through the rainbow, white parts shimmer too
 		float phase = (UV.x + UV.y) * 0.5 + t * 0.25;
 		vec3 rainbow = 0.5 + 0.5 * cos(6.2832 * (phase + vec3(0.0, 0.33, 0.67)));
-		col = mix(hue_shift(col, phase * 6.2832) * 1.1, col * (0.55 + 0.6 * rainbow), 0.45);
+		col = mix(hue_shift(col, phase * 6.2832) * 1.15, col * (0.4 + 0.85 * rainbow), clamp(0.6 * strength, 0.0, 1.0));
 	} else if (mode == 4) { // negative: inverted
 		col = hue_shift(vec3(1.0) - col, 3.14159) * vec3(0.85, 0.8, 1.0);
 	}

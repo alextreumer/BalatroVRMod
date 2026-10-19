@@ -23,6 +23,8 @@ var _half_hands: Array = []
 var _half_vel: Array[Vector3] = []
 var _bits: Array[Dictionary] = []
 var _body: Node3D
+var _pull_from := -1.0              # since when both hands hold it ("Pack Surgeon": a slow tear)
+var confetti: Array = []            # "Pack Surgeon" reward: confetti colours (empty: the usual few bits)
 var _glow: MeshInstance3D
 
 
@@ -105,11 +107,24 @@ func grab(hand: Node3D) -> bool:
 	if _hands.size() == 2:
 		var hs := _hands.keys()
 		_start_gap = (hs[0] as Node3D).global_position.distance_to((hs[1] as Node3D).global_position)
+		_pull_from = _time # both hands on it: the slow tear starts now
 	return true
 
 
 func release(hand: Node3D) -> void:
 	_hands.erase(hand)
+	if not _ripped:
+		_pull_from = -1.0 # (one hand let go: starts again)
+
+
+## How long both hands held it before it tore (0: not torn with both hands).
+func pull_seconds() -> float:
+	return (_time - _pull_from) if _pull_from >= 0.0 else 0.0
+
+
+## How many hands hold its edges right now (2 = torn with both hands).
+func hand_count() -> int:
+	return _hands.size()
 
 
 func holds(hand: Node3D) -> bool:
@@ -146,13 +161,13 @@ func _spawn_bits() -> void:
 	rng.randomize()
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.008, 0.012)
-	for i in 26:
+	for i in (70 if not confetti.is_empty() else 26):
 		var mi := MeshInstance3D.new()
 		mi.mesh = quad
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
-		var palette := [Color(1, 0.85, 0.3), Color(1, 1, 1), Color(0.95, 0.4, 0.5), Color(0.4, 0.75, 1.0)]
+		var palette: Array = confetti if not confetti.is_empty() else [Color(1, 0.85, 0.3), Color(1, 1, 1), Color(0.95, 0.4, 0.5), Color(0.4, 0.75, 1.0)]
 		m.albedo_color = palette[i % palette.size()] * 1.6
 		mi.material_override = m
 		add_child(mi)
@@ -173,7 +188,8 @@ func _process(delta: float) -> void:
 			var a := (hs[0] as Node3D).global_position
 			var b := (hs[1] as Node3D).global_position
 			global_position = (a + b) * 0.5 # held between the hands
-			if a.distance_to(b) - _start_gap > TEAR_DISTANCE:
+			var pulled := a.distance_to(b) - _start_gap
+			if pulled > TEAR_DISTANCE:
 				rip()
 		elif _hands.size() == 1:
 			global_position = (_hands.keys()[0] as Node3D).global_position # one hand carries it

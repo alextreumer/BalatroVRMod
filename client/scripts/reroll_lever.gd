@@ -21,6 +21,8 @@ var _angle := 0.0                 # current pull, degrees
 var _fired := false
 var _spin := 0.0                  # reel spin left (seconds)
 var _enabled := false
+var rainbow := false               # achievement reward "Lever Frenzy": the cabinet flashes in rainbow colours while the reels spin
+var _cabinet: StandardMaterial3D
 
 const REEL_SHADER := """
 shader_type spatial;
@@ -42,6 +44,7 @@ func _ready() -> void:
 	var red := StandardMaterial3D.new()
 	red.albedo_color = Color(0.7, 0.08, 0.1)
 	red.roughness = 0.35
+	_cabinet = red
 	var gold := StandardMaterial3D.new()
 	gold.albedo_color = Color(0.9, 0.68, 0.25)
 	gold.metallic = 0.6
@@ -131,6 +134,17 @@ func _box(size: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:
 
 
 ## In the shop or not, can the player pay, and what the next reroll costs.
+## Achievement reward "One-Armed Bandit": a golden knob (main.gd adds the coin sound).
+## "One-Armed Bandit" reward: the lever's ball in the chosen colour (alpha 0: the normal red).
+func set_metal(colour: Color) -> void:
+	var m := _ball.material_override as StandardMaterial3D
+	var on := colour.a > 0.0
+	var c := colour if on else Color(0.9, 0.08, 0.1)
+	m.albedo_color = c
+	m.emission = c
+	m.metallic = 0.85 if on else 0.0
+
+
 func set_shop(open: bool, can_afford: bool, cost: int) -> void:
 	_enabled = open and can_afford
 	_price.text = ("$%d" % cost) if open else "REROLL"
@@ -170,6 +184,16 @@ func _process(delta: float) -> void:
 	else:
 		_angle = move_toward(_angle, 0.0, delta * 260.0) # springs back up
 	_arm.rotation_degrees.x = _angle
+	if rainbow and _cabinet != null:
+		var on := _spin > 0.0
+		_cabinet.emission_enabled = on
+		if on:
+			var c := Color.from_hsv(fmod(Time.get_ticks_msec() / 1000.0 * 2.5, 1.0), 0.85, 1.0)
+			_cabinet.albedo_color = c
+			_cabinet.emission = c
+			_cabinet.emission_energy_multiplier = 1.2
+		else:
+			_cabinet.albedo_color = Color(0.7, 0.08, 0.1)
 	if _spin > 0.0:
 		_spin -= delta
 		for i in _reels.size():
