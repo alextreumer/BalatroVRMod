@@ -5,3 +5,8 @@ Release/
 client/*.exe
 client/*.pck
 *.zip
+# photos taken in VR (photo mode)
+Photos/
+# screenshots (they show Balatro's card art)
+Docs/preview/
+Docs/alle_joker_modelle.png
