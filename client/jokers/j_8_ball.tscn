@@ -1,0 +1,85 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jokers/augmented_joker.gd" id="1_va2yq"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_f0qkb"]
+albedo_color = Color(0.9, 0.68, 0.25, 1)
+metallic = 0.7
+roughness = 0.3
+emission_enabled = true
+emission = Color(0.9, 0.68, 0.25, 1)
+emission_energy_multiplier = 0.15
+
+[sub_resource type="TorusMesh" id="TorusMesh_5hqda"]
+inner_radius = 0.012
+outer_radius = 0.016
+rings = 24
+ring_segments = 8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_eojxv"]
+albedo_color = Color(0.12, 0.3, 0.16, 1)
+roughness = 0.95
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_chasw"]
+top_radius = 0.016
+bottom_radius = 0.018
+height = 0.003
+radial_segments = 24
+rings = 1
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_d53nu"]
+albedo_color = Color(0.03, 0.03, 0.04, 1)
+metallic = 0.1
+metallic_specular = 0.9
+roughness = 0.12
+
+[sub_resource type="SphereMesh" id="SphereMesh_h4dod"]
+radius = 0.028
+height = 0.056
+radial_segments = 32
+rings = 16
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_oq3e3"]
+albedo_color = Color(0.97, 0.97, 0.95, 1)
+roughness = 0.25
+
+[sub_resource type="SphereMesh" id="SphereMesh_kqt5g"]
+radius = 0.011
+height = 0.022
+radial_segments = 24
+rings = 12
+
+[node name="j_8_ball" type="Node3D" unique_id=770001689]
+script = ExtResource("1_va2yq")
+spin_node = NodePath("Ball")
+spin_speed = 0.6
+
+[node name="@MeshInstance3D@25" type="MeshInstance3D" parent="." unique_id=1436668413]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.004, 0)
+material_override = SubResource("StandardMaterial3D_f0qkb")
+mesh = SubResource("TorusMesh_5hqda")
+
+[node name="@MeshInstance3D@26" type="MeshInstance3D" parent="." unique_id=1381688515]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0015, 0)
+material_override = SubResource("StandardMaterial3D_eojxv")
+mesh = SubResource("CylinderMesh_chasw")
+
+[node name="Ball" type="Node3D" parent="." unique_id=666030959]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.032, 0)
+
+[node name="@MeshInstance3D@27" type="MeshInstance3D" parent="Ball" unique_id=948554737]
+material_override = SubResource("StandardMaterial3D_d53nu")
+mesh = SubResource("SphereMesh_h4dod")
+
+[node name="@MeshInstance3D@28" type="MeshInstance3D" parent="Ball" unique_id=1876008947]
+transform = Transform3D(1, 0, 0, 0, 0.99026805, 0.041751932, 0, -0.1391731, 0.29708043, 0, 0.004, 0.0238)
+material_override = SubResource("StandardMaterial3D_oq3e3")
+mesh = SubResource("SphereMesh_kqt5g")
+
+[node name="@Label3D@29" type="Label3D" parent="Ball" unique_id=86341080]
+transform = Transform3D(1, 0, 0, 0, 0.99026805, 0.1391731, 0, -0.1391731, 0.99026805, 0, 0.0045, 0.0275)
+pixel_size = 0.0006
+modulate = Color(0.05, 0.05, 0.05, 1)
+text = "8"
+font_size = 48
+outline_size = 0

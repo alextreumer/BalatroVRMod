@@ -162,7 +162,11 @@ func _apply() -> void:
 	var label := _node(label_node) as Label3D
 	if label != null and label_source != "":
 		var value = _eval(label_source, "")
-		label.text = label_format % value if label_format.count("%") == 1 else str(value)
+		var numeric: bool = value is int or value is float
+		if label_format.count("%") == 1 and (numeric or label_format.contains("%s")):
+			label.text = label_format % value
+		else:
+			label.text = str(value) # (a value the game hasn't set yet: no number to format)
 
 	var glow := _node(glow_node)
 	if glow != null:

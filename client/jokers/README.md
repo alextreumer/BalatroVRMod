@@ -57,6 +57,41 @@ Every value comes live from the game. A debuffed joker (e.g. by a boss blind) ge
 | **Gros Michel** | A spotty banana trembles | It may spoil at the end of a round (1 in 6) |
 | **Cavendish** | A blazing bunch of bananas: halo, turning sun rays and a real light that bathes the neighbouring jokers in yellow | Gros Michel's rare successor (x3 Mult) |
 
+### The second set (tools/build_jokers2.gd)
+
+| Joker | What you see | What changes |
+|---|---|---|
+| **Ceremonial Dagger** | Fantasy dagger in a velvet cushion: skull pommel, wrapped grip, skull guard with fangs and spiked quillons, notched blade with a long slot | The slot's rim and the fuller glow redder with its Mult |
+| **Constellation** | Star map in a gold ring | One more star lights up per Planet used |
+| **Madness** | Laughing harlequin mask on a stick | More cracks, the eyes burn brighter |
+| **Erosion** | Sandstone pillar on a plinth | Crumbles as the deck shrinks |
+| **Fortune Teller** | Crystal ball, velvet cushion, tarot cards | The mist inside glows brighter per Tarot used |
+| **Glass Joker** | Jimbo made of glass | Another shining crack per Glass card destroyed |
+| **Rocket** | Retro rocket on a launch pad | The exhaust flame grows with the payout |
+| **Egg** | Egg in a twig nest | Grows and turns golden with its sell value |
+| **8 Ball** | Black billiard ball on a brass ring | Turns slowly |
+| **Credit Card** | Embossed card (JIMBO) in a stand | – |
+| **Blueprint** | Half unrolled blueprint with the crest of *Blue Prince* printed on it, pencil | – |
+| **DNA** | Double helix on a lab stand | Turns |
+| **Space Joker** | Ringed planet, Jimbo in a space helmet | A moon circles it |
+| **Mr. Bones** | Skeleton sitting on a crate, waving | – |
+| **Supernova** | Blazing star with spikes of light | The spikes turn |
+| **Cloud 9** | Cloud with a golden 9, coins raining | – |
+| **Canio** | Sad clown with wilted flowers | His tears glow brighter with his xMult |
+| **Triboulet** | Royal jester with crown and sceptre | – |
+| **Yorick** | Skull on old books, a candle | The eyes glow brighter with his xMult |
+| **Chicot** | Jester with a shield, a Boss Blind chip bouncing off | – |
+| **Perkeo** | Jester with a wine barrel | Negative-shimmering bottles circle him |
+
+| **Vampire** | Open coffin with candles, Jimbo as a vampire inside | His eyes burn redder with his xMult |
+| **Swashbuckler** | Treasure chest with a pirate hat and a cutlass | The heap of gold grows with its Mult |
+| **Blue Joker** | A house of blue and white cards | Shrinks as your deck gets smaller |
+| **Steel Joker** | A pyramid of steel ingots | One ingot per Steel card in your deck |
+| **Brainstorm** | A brain under a glass dome | Lightning bolts circle it |
+| **Seance** | Crystal ball with a ghostly hand inside, candles | The hand turns slowly |
+| **Golden Ticket** | A golden "ADMIT ONE" ticket on a stand | Turns slowly |
+| **Smeared Joker** | A painter's palette, red running into orange and blue into green, a brush | – |
+
 Jokers without a scene stand on the table as their card on a little stand.
 
 The models are made by `tools/build_jokers.gd` (all except Popcorn and Runner) and `tools/build_popcorn.gd`. Running them again overwrites the scenes they build – so after editing a scene by hand, don't run them again (or only for other jokers: `... --script res://tools/build_jokers.gd -- castle obelisk`).
