@@ -15,6 +15,7 @@ const ACTIONS := ["play", "continue", "collection", "options", "youtube", "quit_
 const BASE_ID := -300              # target ids of the objects: BASE_ID - index in ACTIONS
 const TOUCH_RADIUS := 0.07         # a hand this close to the buzzer's top presses it
 const CARD := Vector2(0.071, 0.095)
+const VERSION := "1.0"       # shown at the front edge of the menu table
 
 var hands: Array = []              # XRController3D: hands that can slap the buzzer
 
@@ -44,6 +45,7 @@ func _ready() -> void:
 	_build_exit("QUIT VR\nAND GAME", "quit_both", Vector3(0.45, 0.0, -0.36), Color(1.0, 0.3, 0.3))
 	_build_name_plate(Vector3(0.0, 0.0, 0.17))
 	_build_solatro(Vector3(0.34, 0.0, 0.12))
+	_build_version(Vector3(-0.34, 0.0, 0.19))
 	GameFont.apply_to(self)
 
 
@@ -232,6 +234,14 @@ func _build_name_plate(at: Vector3) -> void:
 	var change := _label(root, "CHANGE PROFILE", 28, 0.0006, Color(1.0, 0.85, 0.45), Vector3(0, 0.047, 0.0025))
 	change.outline_size = 4
 	_body(root, "profile", Vector3(0.22, 0.06, 0.03), Vector3(0, 0.025, 0))
+
+
+## The mod's version, printed small on the felt at the front edge of the table.
+func _build_version(at: Vector3) -> void:
+	var root := _holder(at)
+	var l := _label(root, VERSION, 30, 0.0006, Color(1.0, 0.85, 0.5, 0.8), Vector3(0, 0.001, 0))
+	l.rotation_degrees.x = -90.0 # lying on the table, readable from your seat
+	l.outline_size = 4
 
 
 ## A green felt with a fanned spread of cards (Ace of Spades, King of Hearts ...): SOLATRO.

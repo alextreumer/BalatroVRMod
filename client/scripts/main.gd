@@ -118,6 +118,7 @@ var _beam: MeshInstance3D
 var _fan_anchor: Node3D       # where the fan sits on the card hand (calibratable, relative to that hand)
 var _hand_preview: Label3D    # under the fan: the poker hand of the selected cards ("Flush  Lvl.3")
 var _hand_preview_score: Label3D # ... and its chips x mult
+var _sort_button: Node3D      # "SORT" over the card hand while it is turned on its side
 var _grab_anchor: Node3D      # where grabbed cards sit in the pointing hand (calibratable)
 var _calib_hand: XRController3D # the hand holding the calibration handle
 var _left_handed := false
@@ -308,6 +309,7 @@ func _process(delta: float) -> void:
 	_update_sell_glow()
 	_update_fan_glow()
 	_place_hand_preview()
+	_place_sort_button()
 	if _slider_body != null:
 		_update_slider()
 	if _main_menu != null and _main_menu.visible: # the menu sits where the joker board is calibrated
@@ -594,6 +596,77 @@ func _place_hand_preview() -> void:
 	up = (up - to_eye * up.dot(to_eye)).normalized() # "up" across the line of sight
 	var size := _hand_preview.global_basis.get_scale().x # (a bigger card fan has bigger letters: more room)
 	_hand_preview_score.global_position = _hand_preview.global_position - up * 0.042 * size
+
+
+## A "SORT" button that shows up over the cards when you turn the card hand on its side (about
+## 90 degrees): point at it and pull the trigger - the same as pressing that hand's thumbstick.
+func _build_sort_button() -> void:
+	_sort_button = Node3D.new()
+	_sort_button.name = "SortButton"
+	_sort_button.top_level = true # placed in the world each frame: upright, facing you, over the fan
+	_sort_button.visible = false
+	_fan_anchor.add_child(_sort_button)
+	var box := MeshInstance3D.new()
+	var b := BoxMesh.new()
+	b.size = Vector3(0.09, 0.035, 0.015)
+	box.mesh = b
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.0, 0.58, 1.0) # the game's blue (its own Sort buttons)
+	m.emission_enabled = true
+	m.emission = Color(0.0, 0.58, 1.0) * 0.3
+	box.material_override = m
+	_sort_button.add_child(box)
+	var label := Label3D.new()
+	label.text = "SORT"
+	label.font_size = 40
+	label.pixel_size = 0.0005
+	label.outline_size = 0
+	label.position = Vector3(0, 0, 0.0085)
+	box.add_child(label)
+	GameFont.apply_to(label)
+	var body := StaticBody3D.new()
+	body.set_meta("target_id", -51)
+	body.set_meta("kind", "sort")
+	var shape := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = Vector3(0.09, 0.035, 0.02)
+	shape.shape = bs
+	body.add_child(shape)
+	box.add_child(body)
+
+
+## The card hand rolled onto its side: the fan's left-right axis points up or down. Shown from
+## about 65 degrees on, hidden again below about 45 (so it doesn't flicker at the edge).
+func _place_sort_button() -> void:
+	if _sort_button == null:
+		return
+	var want := _vr and not _calibrating and not _hand_cards.is_empty() \
+			and _holder != null and _holder.get_has_tracking_data()
+	if want:
+		var roll := absf(_fan_anchor.global_basis.x.normalized().dot(Vector3.UP))
+		want = roll > (0.7 if _sort_button.visible else 0.9)
+	_sort_button.visible = want
+	if not want:
+		return
+	var top := _fan_anchor.global_position.y
+	for id in _hand_cards:
+		if is_instance_valid(_hand_cards[id]):
+			top = maxf(top, _hand_cards[id].global_position.y)
+	var p := _fan_anchor.global_position
+	p.y = top + CARD_SIZE.x * 0.5 + 0.05 # just over the highest card (sideways, a card is as tall as it is wide)
+	_sort_button.global_position = p
+	var to_eye := _head.global_position - p
+	to_eye.y = 0.0
+	if to_eye.length() > 0.01:
+		_sort_button.look_at(p + to_eye, Vector3.UP, true) # the front (+z) faces you
+
+
+## Sort the hand (by rank <-> by suit), from the card hand's stick or the SORT button.
+func _sort_from_hand() -> void:
+	_toggle_sort()
+	_ach.add("shuffle_master")
+	if _ach.reward("shuffle_master") and _fan_anchor != null:
+		_gold_burst(_fan_anchor.global_position, 30)
 
 
 func _update_hand_preview(state: Dictionary) -> void:
@@ -915,6 +988,7 @@ func _update_jokers(state: Dictionary) -> void:
 					own.visible = str(j.get("value", "")) == ""
 			_set_price_sticker(inst, int(j.get("sell", 0)))
 			_set_sticker_badges(inst, j.get("stickers", []))
+			_set_compat_sticker(inst, "" if str(j.get("facing", "front")) == "back" else str(j.get("compat", "")))
 			_set_face_down(inst, str(j.get("facing", "front")) == "back", state)
 			_set_pinned(inst, bool(j.get("pinned", false)))
 	for uid in _jokers.keys():
@@ -1736,6 +1810,69 @@ func _set_sticker_badges(inst: Node3D, stickers: Array) -> void:
 		inst.set_meta("badge_key", "") # try again once the atlases are there
 
 
+## Blueprint / Brainstorm: a round sticker on the front of the pedestal - a green tick when the
+## joker they copy is "compatible", a red X when it is "incompatible" (like the game's own label).
+func _set_compat_sticker(inst: Node3D, compat: String) -> void:
+	if inst.get_meta("compat", "") == compat:
+		return
+	inst.set_meta("compat", compat)
+	var old := inst.get_node_or_null("CompatSticker")
+	if old != null:
+		old.free()
+	if compat != "compatible" and compat != "incompatible":
+		return
+	var ok := compat == "compatible"
+	var sticker := Node3D.new()
+	sticker.name = "CompatSticker"
+	sticker.position = Vector3(0.036, 0.016, 0.03) # front right, leaning against the pedestal
+	sticker.rotation_degrees = Vector3(-20.0, 40.0, 0.0)
+	inst.add_child(sticker)
+	var paper := MeshInstance3D.new()
+	var disc := CylinderMesh.new()
+	disc.top_radius = 0.013
+	disc.bottom_radius = 0.013
+	disc.height = 0.0012
+	paper.mesh = disc
+	paper.rotation_degrees.x = 90.0 # its face looks forward (+z)
+	var pm := StandardMaterial3D.new()
+	pm.albedo_color = Color(0.97, 0.96, 0.93) # a white rim around the coloured middle
+	pm.roughness = 0.8
+	paper.material_override = pm
+	paper.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sticker.add_child(paper)
+	var fill := MeshInstance3D.new()
+	var inner := CylinderMesh.new()
+	inner.top_radius = 0.011
+	inner.bottom_radius = 0.011
+	inner.height = 0.0014
+	fill.mesh = inner
+	fill.rotation_degrees.x = 90.0
+	var fm := StandardMaterial3D.new()
+	fm.albedo_color = Color(0.3, 0.75, 0.35) if ok else Color(0.9, 0.24, 0.2) # the game's green / red
+	fm.emission_enabled = true
+	fm.emission = fm.albedo_color * 0.25
+	fm.roughness = 0.6
+	fill.material_override = fm
+	fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sticker.add_child(fill)
+	# the symbol: two white bars on the sticker (a tick, or a cross)
+	var wm := StandardMaterial3D.new()
+	wm.albedo_color = Color(1.0, 1.0, 1.0)
+	wm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var bars: Array = [[Vector2(-0.0035, -0.001), 0.007, -45.0], [Vector2(0.002, 0.0015), 0.013, 50.0]] if ok \
+			else [[Vector2.ZERO, 0.014, 45.0], [Vector2.ZERO, 0.014, -45.0]]
+	for bar in bars:
+		var stroke := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(bar[1], 0.0026, 0.0006)
+		stroke.mesh = bm
+		stroke.material_override = wm
+		stroke.position = Vector3(bar[0].x, bar[0].y, 0.001)
+		stroke.rotation_degrees.z = bar[2]
+		stroke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		sticker.add_child(stroke)
+
+
 func _set_price_sticker(inst: Node3D, price: int) -> void:
 	var sticker := inst.get_node_or_null("PriceSticker") as Node3D
 	if sticker == null:
@@ -2064,6 +2201,10 @@ func _press_target(target: Dictionary) -> void:
 	elif target.get("kind", "") == "nextround":
 		_send({"cmd": "next_round"}) # the red button above the reroll machine
 		_buzz(0.4, 0.05)
+	elif target.get("kind", "") == "sort":
+		if _sort_button != null and _sort_button.visible:
+			_sort_from_hand() # the SORT button over the card hand turned on its side
+			_buzz(0.3, 0.04)
 	elif target.get("kind", "") == "wrist":
 		if _wrist != null and _wrist.visible: # (a closed menu never reacts)
 			_wrist.press(id) # a button of the menu above the card hand
@@ -2467,10 +2608,7 @@ func _on_holder_button(button_name: String) -> void:
 				_place_layout()
 		"primary_click":
 			if not _calibrating:
-				_toggle_sort() # stick click on the card hand
-				_ach.add("shuffle_master")
-				if _ach.reward("shuffle_master") and _fan_anchor != null:
-					_gold_burst(_fan_anchor.global_position, 30)
+				_sort_from_hand() # stick click on the card hand
 
 
 ## Sorted by rank -> sort by suit and vice versa (the mod reads the game's current order).
@@ -3202,7 +3340,7 @@ func _show_tutorial() -> void:
 	var discard := "Y" if _left_handed else "B"
 	var recenter := "B" if _left_handed else "Y"
 	var pages := [
-		["Hi, my name is Alex and welcome to UnderTheVRadar's Balatro in VR mod!", "Once a round starts, your cards are in your %s hand. Point at them with your %s hand and pull the trigger to select them - just like clicking. Press the thumbstick of your %s hand to sort them by rank or by suit." % [cards, point, cards]],
+		["Hi, my name is Alex and welcome to UnderTheVRadar's Balatro in VR mod!", "Once a round starts, your cards are in your %s hand. Point at them with your %s hand and pull the trigger to select them - just like clicking. Press the thumbstick of your %s hand to sort them by rank or by suit - or turn that hand on its side and point at SORT." % [cards, point, cards]],
 		["Play & discard", "Grab the selected cards with your %s grip and let go over the golden blind chip to play them (or press %s). Throw them over your shoulder to discard (or press %s)." % [point, play, discard]],
 		["Your table", "Jokers stand on the board: touch one to read it, grab it to move it - left to right is their order. Drop one into the SELL / DISCARD box to sell it - the box lights up when letting go would sell. Cards you grabbed from your hand and let go over the box are discarded. Lift it and look underneath for its price. In the shop, take what you want off the sales counter and pull it towards you to buy it; pull the slot machine's lever to reroll."],
 		["Packs & cards", "Booster packs float up to you: grab them with both hands and tear them open (or point and pull the trigger). Tarot and planet cards stand in the card stand - point at one and pull the trigger to use it."],
@@ -4803,6 +4941,7 @@ func _build_xr_rig() -> void:
 	_fan_anchor.name = "FanAnchor"
 	_fan_anchor.position = HAND_OFFSET
 	_build_hand_preview()
+	_build_sort_button()
 	_build_fan_glow()
 	_grab_anchor = Node3D.new()
 	_grab_anchor.name = "GrabAnchor"
@@ -6597,6 +6736,11 @@ func _animate_game_feel(delta: float) -> void:
 	_return_refused_cards()
 	# The Ox (takes your money for your most played hand): the coin pile trembles nervously
 	_coins.tremble = _boss_key == "bl_ox" and not _calm
+	# The Manacle (one card less in hand): Jimbo's gloves shrink to half their size
+	var boss := _test.boss_key() if _test != null and _test.boss_index >= 0 else _boss_key
+	var glove_size := 0.5 if boss == "bl_manacle" else 1.0
+	for g in _gloves:
+		g.scale = Vector3.ONE * move_toward(g.scale.x, glove_size, delta * 1.5)
 	# the room's sounds follow the game's sound volume and go quiet in the last hand
 	_casino.ambience.volume = clampf(_sounds.last_volume / 0.15, 0.0, 1.5)
 	_casino.ambience.hush = move_toward(_casino.ambience.hush, 1.0 if _tension else 0.0, delta * 0.7)

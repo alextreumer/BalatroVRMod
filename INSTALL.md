@@ -23,9 +23,9 @@ It is usually: `C:\Program Files (x86)\Steam\steamapps\common\Balatro\`
 
 Steamodded is the mod library that Balatro in VR is built on.
 
-1. Download the zip: https://github.com/Steamodded/smods/releases/tag/26.1002.0    --> Download Source Code (zip)
+1. Download the zip: https://github.com/Steamodded/smods/releases/tag/26.1002.0 → **Source code (zip)**. The file is called **`smods-26.1002.0.zip`**.
 2. Unpack it into Balatro's mods folder. Type `%AppData%\Balatro` into the Explorer address bar and create a folder called **`Mods`** there if it does not exist yet.
-   In the end it looks like this: `%AppData%\Balatro\Mods\smods-main\`
+   In the end it looks like this: `%AppData%\Balatro\Mods\smods-26.1002.0\`
 
 **Check:** Start Balatro once. The main menu now shows a **Mods** button. If it is there, everything works. You can close Balatro again.
 

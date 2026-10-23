@@ -2,6 +2,7 @@
 --- MOD_NAME: Balatro in VR
 --- MOD_ID: BalatroVRBridge
 --- MOD_AUTHOR: [UnderTheVRadar]
+--- VERSION: 1.0
 --- MOD_DESCRIPTION: Play Balatro in VR: the whole game around you in a virtual casino, with your cards in your hand and 3D jokers on the table. Needs the "Balatro in VR" client - youtube.com/@UnderTheVRadar
 
 ----------------------------------------------
@@ -559,6 +560,19 @@ emit_area = function(area)
     put_rect(info, area)
     SCN.areas[#SCN.areas + 1] = info
     if area.states and area.states.visible == false then return end
+    -- Steamodded's run setup (decks, stakes, challenges, seed) shows its choices as little "deck"
+    -- type stacks: each deck of the grid is a stack of its card backs (only the top one is sent),
+    -- the chosen deck and the stake tower show every card
+    local cfg = area.config or {}
+    if info.type == "deck" and (cfg.run_select or cfg.run_select_deck_preview or cfg.run_select_stake_tower) then
+        local cards = area.cards or {}
+        if cfg.run_select and cards[#cards] then
+            emit_card(cards[#cards], name)
+        else
+            for _, card in ipairs(cards) do emit_card(card, name) end
+        end
+        return
+    end
     -- the draw pile's "View Deck" button and "52/52" counter: VR has the 3D deck stack for that
     if name == "deck" or info.type == "deck" then return end
     -- the hand's "8/8" counter: the cards are in the player's hand in VR, the counter adds nothing
@@ -965,6 +979,12 @@ local function joker_state(card, slot)
         sell = num(card.sell_cost), -- the price sticker under the pedestal
         stickers = card_stickers(card), -- Eternal, Rental, ... shown as small badges on the 3D pedestal
     }
+    -- Blueprint / Brainstorm: the game works out every frame whether the joker they copy can be
+    -- copied ("compatible" / "incompatible"); VR shows it as a green tick or a red X sticker
+    local key = card.config.center.key
+    if key == "j_blueprint" or key == "j_brainstorm" then
+        j.compat = a.blueprint_compat or ""
+    end
     local n = a.name
     if n == "Castle" and cr.castle_card then
         j.target.suit = cr.castle_card.suit
@@ -1303,6 +1323,14 @@ local function build_state()
     local in_run = G.STAGE == G.STAGES.RUN
     local main_menu = G.STAGE == G.STAGES.MAIN_MENU
     if not main_menu then VR.menu_save_read = false end -- read the save again on the next visit
+    -- the game builds its menu buttons a few seconds after the main menu starts (after the title
+    -- animation) and slides them in: VR shows its menu table only once they are there and usable
+    local ui = G.MAIN_MENU_UI
+    if not main_menu or not ui or ui.REMOVED then
+        VR.menu_ready = false
+    elseif not VR.menu_ready and ui.VT and ui.T and math.abs(ui.VT.y - ui.T.y) < 0.1 then
+        VR.menu_ready = true
+    end
     local cr = game.current_round or {}
     -- in a run the chosen deck is selected_back; on the run setup screen the deck being looked at is viewed_back
     local back = game.selected_back or (not in_run and game.viewed_back) or nil
@@ -1328,7 +1356,7 @@ local function build_state()
             composition = deck_composition(),
         },
         overlay = G.OVERLAY_MENU ~= nil,
-        menu = main_menu and menu_info() or nil, -- only in the main menu: the VR menu on the table
+        menu = (main_menu and VR.menu_ready) and menu_info() or nil, -- only in the main menu (once it is usable): the VR menu on the table
         viewing_deck = VR.deck_view_open and G.OVERLAY_MENU ~= nil or false,
         round = {
             ante = num(game.round_resets and game.round_resets.ante),

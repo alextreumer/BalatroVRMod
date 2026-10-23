@@ -24,6 +24,12 @@ const RANKS := ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "
 const SUITS := ["Hearts", "Clubs", "Diamonds", "Spades"] # (their rows in the game's card atlas)
 const HAND_POINTS := {"High Card": 5, "Pair": 10, "Two Pair": 20, "Three of a Kind": 30, "Straight": 40,
 	"Flush": 50, "Full House": 60, "Four of a Kind": 100, "Straight Flush": 125, "Royal Flush": 150}
+# the decks of the main game (key, position in its "centers" atlas): each Solatro game picks one
+# at random for the backs of its cards and the draw pile
+const DECK_BACKS := [["b_red", [0, 0]], ["b_blue", [0, 2]], ["b_yellow", [1, 2]], ["b_green", [2, 2]],
+	["b_black", [3, 2]], ["b_magic", [0, 3]], ["b_nebula", [3, 0]], ["b_ghost", [6, 2]], ["b_abandoned", [3, 3]],
+	["b_checkered", [1, 3]], ["b_zodiac", [3, 4]], ["b_painted", [4, 3]], ["b_anaglyph", [2, 4]],
+	["b_plasma", [4, 2]], ["b_erratic", [2, 3]]]
 const TOKENS := [
 	{"key": "extra_card", "name": "Extra Card", "cost": 10, "text": "1 more card in your hand this round"},
 	{"key": "extra_discard", "name": "Extra Discard", "cost": 25, "text": "1 more discard this round"},
@@ -61,7 +67,8 @@ func set_left_handed(on: bool) -> void:
 		(_signs[EXIT_ID] as Node3D).position = HELP_POS if on else EXIT_POS
 
 var active := false
-var gold_cards := false             # achievement reward "Royal Treatment": the cards are gold cards
+var _back: Array = DECK_BACKS[0]    # this game's card back (see DECK_BACKS)
+var gold_cards := false            # achievement reward "Royal Treatment": the cards are gold cards
 var best := 0                       # best round reached (main.gd loads / saves it)
 var hands: Array = []               # XRController3D (for grabbing token chips)
 
@@ -162,6 +169,7 @@ func start() -> void:
 	_owned.clear()
 	_bought_game.clear()
 	_bonus = 0
+	_back = DECK_BACKS.pick_random()
 	_show_token_hints(true) # (a new game: the pedestal's help and the tokens' names again)
 	_new_round()
 	show_rules(best == 0) # the first games start with the rules
@@ -489,7 +497,7 @@ func _card_item(id: int, area: String) -> Dictionary:
 	var r := (id - 1) % 13
 	var s := (id - 1) / 13
 	return {"k": "c", "id": id, "area": area, "f": "front", "set": "Default", "rank": RANKS[r], "suit": SUITS[s],
-		"ca": "centers", "cp": [6, 0] if gold_cards else [1, 0], "fa": "cards_1", "fp": [r, s], "hl": _selected.has(id),
+		"ca": "centers", "cp": [6, 0] if gold_cards else [1, 0], "fa": "cards_1", "fp": [r, s], "ba": "centers", "bp": _back[1], "hl": _selected.has(id),
 		"x": 0.0, "y": 0.0, "w": 1.4, "h": 1.9}
 
 
@@ -504,7 +512,7 @@ func _publish() -> void:
 		items.append(_card_item(id, "hand"))
 	if _banked: # the banked joker, as a card in the hand: select it to play it as a wildcard
 		items.append({"k": "c", "id": JOKER_ID, "area": "hand", "f": "front", "set": "Joker", "name": "JOKER (wild)",
-			"ca": "Joker", "cp": [0, 0], "hl": _selected.has(JOKER_ID), "x": 0.0, "y": 0.0, "w": 1.4, "h": 1.9})
+			"ca": "Joker", "cp": [0, 0], "ba": "centers", "bp": _back[1], "hl": _selected.has(JOKER_ID), "x": 0.0, "y": 0.0, "w": 1.4, "h": 1.9})
 	for id in _played:
 		items.append(_card_item(id, "play"))
 	if _phase == "shop":
@@ -530,7 +538,7 @@ func _publish() -> void:
 			"chip_text": "ROUND %d" % _round,
 			"chip_back": "PLAYS LEFT: %d
 DISCARDS LEFT: %d" % [_plays, _discards]}, # the blind chip says SOLATRO (see main.gd _set_chip_text)
-		"deck": {"remaining": _deck.size(), "total": 54, "back_key": "b_red", "back_sprite": {"atlas": "centers", "pos": [0, 0]}},
+		"deck": {"remaining": _deck.size(), "total": 54, "back_key": _back[0], "back_sprite": {"atlas": "centers", "pos": _back[1]}},
 		"jokers": [], "consumables": [], "shop_open": _phase == "shop", "reroll_cost": 0, "can_reroll": false,
 	}
 	var scene := {"room": {"w": 20, "h": 11.5}, "state_name": state_name, "groups": [], "items": items}

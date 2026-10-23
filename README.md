@@ -10,15 +10,13 @@ Play [Balatro](https://www.playbalatro.com/) in virtual reality. Balatro keeps r
 
 You need your own copy of Balatro: the client takes all card art, sounds and the font from your installed game while it runs – **no game files from Balatro are included here.** Fan project, not affiliated with LocalThunk or Playstack.
 
-> **Beta:** this is a pre-release for beta testers.
-
 ## Install
 
 You need Balatro (Steam, Windows) and a VR headset (e.g. Meta Quest with Virtual Desktop or Quest Link, or SteamVR).
 
 1. **Lovely:** download `lovely-x86_64-pc-windows-msvc.zip` from [lovely-injector releases](https://github.com/ethangreen-dev/lovely-injector/releases) and copy the `winmm.dll` inside it into Balatro's game folder (Steam → right-click Balatro → Manage → Browse local files).
 2. **Steamodded:** download [Steamodded](https://github.com/Steamodded/smods) (Code → Download ZIP) and unpack it into `%AppData%\Balatro\Mods\`.
-3. **Balatro in VR:** download the zip from the [Releases](https://github.com/alextreumer/BalatroVRMod/releases) page (marked *Pre-release*). Copy its `Mod\BalatroVRBridge` folder into `%AppData%\Balatro\Mods\` and the `Balatro in VR` folder anywhere you like.
+3. **Balatro in VR:** download the zip from the [Releases](https://github.com/alextreumer/BalatroVRMod/releases) page. Copy its `Mod\BalatroVRBridge` folder into `%AppData%\Balatro\Mods\` and the `Balatro in VR` folder anywhere you like.
 4. **Play:** start your VR software, then `Balatro in VR.exe`, then Balatro. Both find each other by themselves.
 
 The zip contains `INSTALL.md` with every step in detail and help if something does not work.
