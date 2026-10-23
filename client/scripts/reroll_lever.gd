@@ -6,7 +6,12 @@ extends Node3D
 
 signal pulled
 
-const GRAB_RADIUS := 0.08
+const GRAB_RADIUS := 0.1          # (metres round the ball where a grip takes hold of it)
+const BALL_RADIUS := 0.018        # the red ball (big: easy to hit)
+const BLINK_TIME := 0.45          # a hand reaching the ball: it flashes three times
+const GLOW := 0.25                # the ball's glow at rest ...
+const GLOW_NEAR := 0.8            # ... while a hand is within reach ...
+const GLOW_FLASH := 3.0           # ... and in a flash
 const PULL_ANGLE := 55.0          # degrees down that count as a pull
 const MAX_ANGLE := 75.0
 
@@ -23,6 +28,9 @@ var _spin := 0.0                  # reel spin left (seconds)
 var _enabled := false
 var rainbow := false               # achievement reward "Lever Frenzy": the cabinet flashes in rainbow colours while the reels spin
 var _cabinet: StandardMaterial3D
+var hands: Array = []              # the hands that can reach for the ball (it flashes when one gets there)
+var _near := false
+var _blink := 0.0
 
 const REEL_SHADER := """
 shader_type spatial;
@@ -97,17 +105,17 @@ func _ready() -> void:
 	_arm.add_child(rod)
 	_ball = MeshInstance3D.new()
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.012
-	sphere.height = 0.024
+	sphere.radius = BALL_RADIUS
+	sphere.height = BALL_RADIUS * 2.0
 	_ball.mesh = sphere
 	var ball_mat := StandardMaterial3D.new()
 	ball_mat.albedo_color = Color(0.9, 0.08, 0.1)
 	ball_mat.roughness = 0.25
 	ball_mat.emission_enabled = true
 	ball_mat.emission = Color(0.9, 0.08, 0.1)
-	ball_mat.emission_energy_multiplier = 0.25
+	ball_mat.emission_energy_multiplier = GLOW
 	_ball.material_override = ball_mat
-	_ball.position = Vector3(0.006, 0.082, 0)
+	_ball.position = Vector3(0.006, 0.08 + BALL_RADIUS * 0.6, 0) # (on top of the rod)
 	_arm.add_child(_ball)
 	_box(Vector3(0.012, 0.02, 0.02), Vector3(0.053, 0.06, 0), gold) # hinge
 
@@ -170,7 +178,27 @@ func holds(hand: Node3D) -> bool:
 	return hand == _hand
 
 
+## A hand coming within reach of the ball: it flashes, then glows a little while the hand stays.
+func _show_reach(delta: float) -> void:
+	var near := false
+	if _hand == null and is_visible_in_tree():
+		for h in hands:
+			if h == null or not is_instance_valid(h) or not (h as Node3D).is_inside_tree():
+				continue
+			if (h as Node3D).global_position.distance_to(_ball.global_position) <= GRAB_RADIUS:
+				near = true
+	if near and not _near:
+		_blink = BLINK_TIME
+	_near = near
+	var glow := GLOW_NEAR if near else GLOW
+	if _blink > 0.0:
+		_blink -= delta
+		glow = GLOW_FLASH if int(_blink / (BLINK_TIME / 6.0)) % 2 == 1 else GLOW # (starts with a flash)
+	(_ball.material_override as StandardMaterial3D).emission_energy_multiplier = glow
+
+
 func _process(delta: float) -> void:
+	_show_reach(delta)
 	if _hand != null and is_instance_valid(_hand):
 		# the lever follows the hand: how far down (around the pivot, in the machine's side plane)
 		var local := _arm.get_parent_node_3d().to_local(_hand.global_position) - _arm.position

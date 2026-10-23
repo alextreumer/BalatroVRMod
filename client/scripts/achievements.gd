@@ -116,7 +116,7 @@ const LIST := [
 	{"id": "five_kind", "name": "High Five-of-a-Kind", "text": "Play Five of a Kind 10 times in VR", "goal": 10,
 		"reward": "Five flames for a Five of a Kind"},
 	{"id": "token_hoarder", "name": "Token Hoarder", "text": "Buy all 6 tokens in one game of Solatro", "goal": 1,
-		"reward": "The token bowl glows in your colour", "choices": METALS},
+		"reward": "The token pedestal's fittings in your colour", "choices": METALS},
 	{"id": "bargain", "name": "Bargain Hunter", "text": "Buy 10 things for $2 or less (or free)", "goal": 10,
 		"reward": "SALE! stickers on cheap things in the shop"},
 	{"id": "pack_surgeon", "name": "Pack Surgeon", "text": "Hold a pack with both hands for 3 s, then tear it", "goal": 1,

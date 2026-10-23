@@ -1,26 +1,34 @@
 class_name CasinoAmbience
 extends Node3D
 ## The sound of the casino around you (only in the virtual casino): now and then a slot machine
-## paying out along the walls, glasses clinking at the bar and chips clicking at the tables. Every
-## sound comes from its place in the room and goes through the room's reverb. (No background
-## murmur: a constant noise bed was more disturbing than atmospheric.)
-## The bells, the reels and the glasses are made here (Balatro has no such sounds); the payout
-## coins and the chips are the game's own sounds (the mod sends them when connecting).
+## along the walls (a loss, a small win, now and then a big one), glasses clinking or a cocktail
+## shaker at the bar, chips clicking, a dealer shuffling and dealing, a roulette ball rolling and
+## dropping into its pocket, dice rattling over a table. Every sound comes from its place in the
+## room and goes through the room's reverb. (No background murmur and no voices: a constant noise
+## bed was more disturbing than atmospheric.)
+## The bells, the reels, the glasses, the roulette, the dice and the shaker are made here (Balatro
+## has no such sounds); coins, chips, cards and a crumpled ticket are the game's own sounds (the mod
+## sends them when connecting - without them those parts just stay quiet).
 ## Positions are in the casino room's coordinates (this node is a child of it).
 
 const RATE := 16000
 const BUS := "Room"
 
-var sounds: SoundBank              # for the game's coin / chip sounds (bus "Room" too)
+var sounds: SoundBank              # for the game's own sounds (bus "Room" too)
 var volume := 1.0                  # follows the game's sound volume (set by main.gd)
 var hush := 0.0                    # 0 .. 1: the room goes quiet (the last hand)
 
 var _clink: AudioStreamWAV
 var _bell: AudioStreamWAV
 var _reel: AudioStreamWAV
+var _clunk: AudioStreamWAV         # the reels stopping one after the other (a loss)
+var _jingle: AudioStreamWAV        # a big win: three bells going up
+var _roulette: AudioStreamWAV
+var _dice: AudioStreamWAV
+var _shaker: AudioStreamWAV
 var _oneshots: Array[AudioStreamPlayer3D] = []
 var _next := 0
-var _timers := {"slot": 6.0, "glass": 4.0, "chips": 9.0}
+var _timers := {"slot": 6.0, "bar": 4.0, "chips": 9.0, "cards": 12.0, "roulette": 20.0, "dice": 28.0}
 var _rng := RandomNumberGenerator.new()
 var _active := false
 
@@ -28,6 +36,10 @@ var _active := false
 var machines: Array[Vector3] = []
 var bar := Vector3(0, 1.1, 2.5)
 var tables: Array[Vector3] = [Vector3(-2.7, 0.8, -3.9), Vector3(2.7, 0.8, -3.9), Vector3(-2.9, 0.8, 1.9), Vector3(2.9, 0.8, 1.9)]
+## which table plays what: cards at two of them, roulette and dice at the others
+const CARD_TABLES := [0, 3]
+const ROULETTE_TABLE := 1
+const DICE_TABLE := 2
 
 
 func _ready() -> void:
@@ -35,6 +47,11 @@ func _ready() -> void:
 	_clink = _make_clink()
 	_bell = _make_bell()
 	_reel = _make_reel()
+	_clunk = _make_clunk()
+	_jingle = _make_jingle()
+	_roulette = _make_roulette()
+	_dice = _make_dice()
+	_shaker = _make_shaker()
 	for i in 24: # (enough for a jackpot: every machine rings at once)
 		_oneshots.append(_player())
 
@@ -65,22 +82,27 @@ func _process(delta: float) -> void:
 		if _timers[key] > 0.0:
 			continue
 		match key:
-			"slot": # a slot machine along the walls: reels rattle, a bell, a cascade of coins
+			"slot": # a slot machine along the walls
 				_timers[key] = _rng.randf_range(7.0, 16.0)
 				if not machines.is_empty():
-					_slot_payout(machines[_rng.randi() % machines.size()], gain)
-			"glass":
+					var i := _rng.randi() % machines.size()
+					_slot(machines[i], i, gain)
+			"bar":
 				_timers[key] = _rng.randf_range(5.0, 13.0)
-				var at := bar + Vector3(_rng.randf_range(-1.2, 1.2), 0.0, -0.9)
-				_play(_clink, at, -20.0 + gain, _rng.randf_range(0.85, 1.25))
-				if _rng.randf() < 0.5: # cheers: a second glass answers
-					get_tree().create_timer(0.12).timeout.connect(func(): _play(_clink, at + Vector3(0.2, 0, 0), -21.0 + gain, _rng.randf_range(0.9, 1.3)))
+				_bar(gain)
 			"chips":
 				_timers[key] = _rng.randf_range(8.0, 18.0)
-				var t: Vector3 = tables[_rng.randi() % tables.size()]
-				for i in _rng.randi_range(2, 4):
-					var code := "chips1" if _rng.randf() < 0.5 else "chips2"
-					get_tree().create_timer(i * 0.11).timeout.connect(func(): _game_sound(code, t, 0.25, _rng.randf_range(1.1, 1.4)))
+				_chips(tables[_rng.randi() % tables.size()], _rng.randi_range(2, 4))
+			"cards": # a dealer shuffles and deals a hand
+				_timers[key] = _rng.randf_range(10.0, 22.0)
+				_deal(tables[CARD_TABLES[_rng.randi() % CARD_TABLES.size()]])
+			"roulette":
+				_timers[key] = _rng.randf_range(24.0, 45.0)
+				_spin_roulette(tables[ROULETTE_TABLE], gain)
+			"dice":
+				_timers[key] = _rng.randf_range(18.0, 36.0)
+				var t: Vector3 = tables[DICE_TABLE]
+				_play(_dice, t + Vector3(_rng.randf_range(-0.4, 0.4), 0.05, 0.0), -19.0 + gain, _rng.randf_range(0.9, 1.15))
 
 
 ## The run is won: all machines pay out at once, bells and coins from every wall.
@@ -97,15 +119,68 @@ func jackpot() -> void:
 					_game_sound("coin%d" % _rng.randi_range(1, 7), at + Vector3(0, 0.3, 0), 0.3, _rng.randf_range(0.95, 1.25))))
 
 
-func _slot_payout(at: Vector3, gain: float) -> void:
-	_play(_reel, at + Vector3(0, 1.0, 0), -17.0 + gain, 1.0)
-	var big := _rng.randf() < 0.25
+## A slot machine: the reels spin, then a loss (the reels clunk to a stop, sometimes the ticket is
+## crumpled), a small win (bell, a few coins) or now and then a big one (a little tune, many coins).
+## Each machine has its own pitch, so they don't all sound alike.
+func _slot(at: Vector3, index: int, gain: float) -> void:
+	var pitch := 0.85 + float(index % 5) * 0.08
+	_play(_reel, at + Vector3(0, 1.0, 0), -17.0 + gain, _rng.randf_range(0.9, 1.1))
+	var roll := _rng.randf()
+	if roll < 0.4: # a loss
+		get_tree().create_timer(0.8).timeout.connect(func():
+			_play(_clunk, at + Vector3(0, 1.0, 0), -19.0 + gain, pitch)
+			if _rng.randf() < 0.35:
+				get_tree().create_timer(0.9).timeout.connect(func():
+					_game_sound("crumple%d" % _rng.randi_range(1, 3), at + Vector3(0.3, 1.1, 0.4), 0.18, _rng.randf_range(0.9, 1.1))))
+		return
+	var big := roll > 0.88
 	get_tree().create_timer(0.9).timeout.connect(func():
-		_play(_bell, at + Vector3(0, 1.4, 0), (-15.0 if big else -19.0) + gain, 1.0 if big else 1.25)
-		var coins := _rng.randi_range(6, 14) if big else _rng.randi_range(2, 5)
+		if big:
+			_play(_jingle, at + Vector3(0, 1.4, 0), -15.0 + gain, pitch)
+		else:
+			_play(_bell, at + Vector3(0, 1.4, 0), -19.0 + gain, 1.25 * pitch)
+		var coins := _rng.randi_range(8, 16) if big else _rng.randi_range(2, 5)
 		for i in coins:
-			get_tree().create_timer(0.15 + i * 0.07).timeout.connect(func():
+			get_tree().create_timer((0.5 if big else 0.15) + i * 0.07).timeout.connect(func():
 				_game_sound("coin%d" % _rng.randi_range(1, 7), at + Vector3(0, 0.3, 0), 0.22, _rng.randf_range(0.95, 1.2))))
+
+
+## At the bar: two glasses clinking (cheers), or a cocktail shaker and then the glass.
+func _bar(gain: float) -> void:
+	var at := bar + Vector3(_rng.randf_range(-1.2, 1.2), 0.0, -0.9)
+	if _rng.randf() < 0.3:
+		_play(_shaker, at, -21.0 + gain, _rng.randf_range(0.9, 1.1))
+		get_tree().create_timer(2.0).timeout.connect(func(): _play(_clink, at, -23.0 + gain, _rng.randf_range(1.2, 1.4)))
+		return
+	_play(_clink, at, -20.0 + gain, _rng.randf_range(0.85, 1.25))
+	if _rng.randf() < 0.5: # cheers: a second glass answers
+		get_tree().create_timer(0.12).timeout.connect(func(): _play(_clink, at + Vector3(0.2, 0, 0), -21.0 + gain, _rng.randf_range(0.9, 1.3)))
+
+
+## Chips clicking on a table (stacked, pushed, paid out).
+func _chips(t: Vector3, n: int) -> void:
+	for i in n:
+		var code := "chips1" if _rng.randf() < 0.5 else "chips2"
+		get_tree().create_timer(i * 0.11).timeout.connect(func(): _game_sound(code, t, 0.25, _rng.randf_range(1.1, 1.4)))
+
+
+## A dealer shuffles (the fan of cards) and deals a few cards across the table.
+func _deal(t: Vector3) -> void:
+	_game_sound("cardFan2", t, 0.22, _rng.randf_range(0.95, 1.1))
+	var cards := _rng.randi_range(3, 5)
+	for i in cards:
+		var code: String = ["cardSlide1", "cardSlide2", "card1", "card3"][_rng.randi() % 4]
+		var spot := t + Vector3(_rng.randf_range(-0.5, 0.5), 0.0, _rng.randf_range(-0.3, 0.3))
+		get_tree().create_timer(0.9 + i * _rng.randf_range(0.22, 0.32)).timeout.connect(func():
+			_game_sound(code, spot, 0.2, _rng.randf_range(1.0, 1.25)))
+
+
+## The roulette: the ball runs round, slows down, bounces and drops into a pocket; sometimes the
+## croupier pays out with a few chips afterwards.
+func _spin_roulette(t: Vector3, gain: float) -> void:
+	_play(_roulette, t + Vector3(0, 0.05, 0), -18.0 + gain, _rng.randf_range(0.95, 1.05))
+	if _rng.randf() < 0.5:
+		get_tree().create_timer(5.0).timeout.connect(func(): _chips(t, _rng.randi_range(3, 5)))
 
 
 func _play(stream: AudioStream, at: Vector3, db: float, pitch: float) -> void:
@@ -120,7 +195,7 @@ func _play(stream: AudioStream, at: Vector3, db: float, pitch: float) -> void:
 	p.play()
 
 
-## One of the game's own sounds (coins, chips), if the mod has sent it.
+## One of the game's own sounds (coins, chips, cards ...), if the mod has sent it.
 func _game_sound(code: String, at: Vector3, vol: float, pitch: float) -> void:
 	if sounds == null or not sounds.has_sound(code):
 		return
@@ -144,6 +219,17 @@ static func _wav(samples: PackedFloat32Array, loop: bool) -> AudioStreamWAV:
 		w.loop_begin = 0
 		w.loop_end = samples.size()
 	return w
+
+
+## A short hard knock (dice, a roulette ball, a reel stopping): a damped tone plus a noise click.
+static func _knock(out: PackedFloat32Array, at: float, freq: float, amp: float, decay: float, rng: RandomNumberGenerator) -> void:
+	var start := int(at * RATE)
+	var n := int(RATE * 0.08)
+	for j in n:
+		if start + j >= out.size():
+			return
+		var t := float(j) / RATE
+		out[start + j] += (sin(TAU * freq * t) * 0.7 + rng.randf_range(-1.0, 1.0) * 0.5 * exp(-t * 400.0)) * amp * exp(-t * decay)
 
 
 ## Two glasses touching: a few high, slightly detuned partials ringing out.
@@ -174,6 +260,24 @@ func _make_bell() -> AudioStreamWAV:
 	return _wav(out, false)
 
 
+## A big win: three bells going up (C, E, G), the last one ringing out.
+func _make_jingle() -> AudioStreamWAV:
+	var n := int(RATE * 1.8)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var notes := [[0.0, 1046.5], [0.14, 1318.5], [0.28, 1568.0], [0.42, 2093.0]]
+	for i in n:
+		var t := float(i) / RATE
+		var s := 0.0
+		for note in notes:
+			var d: float = t - note[0]
+			if d >= 0.0:
+				var f: float = note[1]
+				s += (sin(TAU * f * d) + 0.4 * sin(TAU * f * 2.0 * d)) * exp(-(3.0 if note[0] == 0.42 else 7.0) * d) * minf(d * 1500.0, 1.0)
+		out[i] = s * 0.18
+	return _wav(out, false)
+
+
 ## Spinning reels: a fast rattle of clicks that slows down.
 func _make_reel() -> AudioStreamWAV:
 	var n := int(RATE * 0.85)
@@ -188,4 +292,72 @@ func _make_reel() -> AudioStreamWAV:
 			if start + j < n:
 				out[start + j] += rng.randf_range(-1.0, 1.0) * exp(-j / 18.0) * 0.35
 		t += 0.022 + t * t * 0.09 # the clicks come slower and slower
+	return _wav(out, false)
+
+
+## The reels stopping one after the other: three heavy clunks.
+func _make_clunk() -> AudioStreamWAV:
+	var out := PackedFloat32Array()
+	out.resize(int(RATE * 0.6))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	for k in 3:
+		_knock(out, k * 0.16, 180.0, 0.55, 40.0, rng)
+	return _wav(out, false)
+
+
+## The roulette: the ball whirring round the rim (a soft rolling noise with the frets clicking,
+## slower and slower), then a few bounces and the drop into its pocket.
+func _make_roulette() -> AudioStreamWAV:
+	var length := 4.2
+	var n := int(RATE * length)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 23
+	var low := 0.0
+	for i in int(RATE * 3.0): # rolling: low-passed noise, fading as the ball slows
+		var t := float(i) / RATE
+		low += (rng.randf_range(-1.0, 1.0) - low) * 0.08
+		out[i] += low * 0.5 * (1.0 - t / 3.0) * minf(t * 4.0, 1.0)
+	var t := 0.1
+	while t < 3.0: # the frets: clicks coming slower and slower
+		_knock(out, t, 2600.0, 0.12 * (1.0 - t / 3.4), 160.0, rng)
+		t += 0.05 + 0.09 * t * t / 3.0
+	for b in [[3.15, 0.4], [3.38, 0.28], [3.55, 0.2], [3.66, 0.14], [3.74, 0.1]]: # bounces, then it lies still
+		_knock(out, b[0], 1500.0, b[1], 70.0, rng)
+	return _wav(out, false)
+
+
+## Two dice thrown over the felt: a tumble of quick knocks, the gaps getting longer.
+func _make_dice() -> AudioStreamWAV:
+	var out := PackedFloat32Array()
+	out.resize(int(RATE * 1.1))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	var t := 0.0
+	var amp := 0.45
+	for k in 11:
+		_knock(out, t, rng.randf_range(1700.0, 2400.0), amp, 90.0, rng)
+		t += rng.randf_range(0.03, 0.06) + k * 0.012
+		amp *= 0.82
+	return _wav(out, false)
+
+
+## A cocktail shaker: ice rattling back and forth, about six strokes a second.
+func _make_shaker() -> AudioStreamWAV:
+	var length := 1.6
+	var n := int(RATE * length)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 31
+	var prev := 0.0
+	for i in n:
+		var t := float(i) / RATE
+		var stroke := fposmod(t * 6.0, 1.0) # each stroke: the ice hits one end, then rattles
+		var env := exp(-stroke * 9.0) * minf(t * 10.0, 1.0) * minf((length - t) * 5.0, 1.0)
+		var noise := rng.randf_range(-1.0, 1.0)
+		out[i] = (noise - prev) * 0.35 * env # (high-passed: the bright rattle of ice)
+		prev = noise
 	return _wav(out, false)

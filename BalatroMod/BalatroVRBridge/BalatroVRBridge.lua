@@ -309,7 +309,17 @@ end
 
 -- The score flames behind chips/mult are a sprite the game draws through its 'flame' shader;
 -- without that shader it is just a raw icon. Send the flame strength instead (only while burning).
-local FLAMES = { flame_chips = "chip_flames", flame_mult = "mult_flames" }
+-- The score flames' state in G.ARGS: Steamodded's scoring parameters call the chips flame
+-- "chips_flames" (vanilla: "chip_flames"), so the first name that exists wins.
+local FLAMES = { flame_chips = { "chips_flames", "chip_flames" }, flame_mult = { "mult_flames" } }
+
+local function flame_args(names)
+    for _, name in ipairs(names) do
+        local args = G.ARGS and G.ARGS[name]
+        if args then return args end
+    end
+    return nil
+end
 
 -- Where a sprite sits in its atlas: Sprite keeps it in sprite_pos, AnimatedSprite (blind chips,
 -- also as card faces in the Blinds collection) in animation.x / .y
@@ -326,7 +336,7 @@ local function emit_object(obj, holder)
     if type(obj) == "table" and obj.states and obj.states.visible == false then return end
     local flame = holder and holder.config and FLAMES[holder.config.id]
     if flame then
-        local args = G.ARGS and G.ARGS[flame]
+        local args = flame_args(flame)
         local intensity = args and num(args.real_intensity or args.intensity) or 0
         if intensity > 0.01 then
             local item = { k = "fl", id = oid(obj), i = r3(intensity), c = col(args.colour_1), c2 = col(args.colour_2) }
@@ -1251,8 +1261,8 @@ local function text_input_state()
 end
 
 -- The score flames behind chips and mult (strength and colours), while they burn
-local function score_flame(name)
-    local args = G.ARGS and G.ARGS[name]
+local function score_flame(names)
+    local args = flame_args(names)
     local intensity = args and num(args.real_intensity or args.intensity) or 0
     if intensity <= 0.01 then return nil end
     return { i = r3(intensity), c = col(args.colour_1), c2 = col(args.colour_2) }
@@ -1334,7 +1344,7 @@ local function build_state()
                 level = tostring(cr.current_hand.hand_level or ""),
                 chips = tostring(cr.current_hand.chip_text or ""),
                 mult = tostring(cr.current_hand.mult_text or ""),
-                cf = score_flame("chip_flames"), mf = score_flame("mult_flames"), -- (VR: flames over the play stand)
+                cf = score_flame(FLAMES.flame_chips), mf = score_flame(FLAMES.flame_mult), -- (VR: flames over the play stand)
             } or nil,
         },
         blind = {
@@ -1879,8 +1889,16 @@ end
 
 -- The VR client asks for texture atlases it needs on its own (Solatro: the playing cards and the
 -- joker card while the game itself only shows its main menu)
+-- The client asks for atlases it needs (e.g. Solatro's cards and joker): names separated by spaces,
+-- because commands arrive as flat objects (decode_flat reads no lists).
 HANDLERS.need_atlas = { gated = false, fn = function(m)
-    for _, name in ipairs(m.names or {}) do
+    local names = {}
+    if type(m.names) == "string" then
+        for name in m.names:gmatch("%S+") do names[#names + 1] = name end
+    elseif type(m.names) == "table" then
+        names = m.names
+    end
+    for _, name in ipairs(names) do
         if type(name) == "string" and ((G.ASSET_ATLAS and G.ASSET_ATLAS[name]) or (G.ANIMATION_ATLAS and G.ANIMATION_ATLAS[name])) then
             VR.state_atlases[name] = true
         end
@@ -2527,7 +2545,9 @@ end
 -- chips at the side tables): sent right after connecting, one per frame, before they are needed.
 local AMBIENT_SOUNDS = { "coin1", "coin2", "coin3", "coin4", "coin5", "coin6", "coin7", "chips1", "chips2",
                          -- (Solatro, which runs in VR alone: its cards' sounds)
-                         "cardSlide1", "card1", "multhit1", "whoosh1" }
+                         "cardSlide1", "card1", "multhit1", "whoosh1",
+                         -- (the casino's card tables: shuffling and dealing; a crumpled slot ticket)
+                         "cardFan2", "cardSlide2", "card3", "crumple1", "crumple2", "crumple3" }
 function VR.send_ambient_sounds()
     if NET.state ~= "connected" then return end
     for _, code in ipairs(AMBIENT_SOUNDS) do

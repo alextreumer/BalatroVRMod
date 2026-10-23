@@ -707,7 +707,7 @@ func _apply_state(state: Dictionary) -> void:
 	if _menu_on:
 		if not _menu_atlas_asked: # the Solatro cards on the menu table need the card pictures
 			_menu_atlas_asked = true
-			_send({"cmd": "need_atlas", "names": ["cards_1", "centers"]})
+			_send({"cmd": "need_atlas", "names": "cards_1 centers"}) # (one string: commands are flat)
 		_main_menu.hands = [_left, _right]
 		_main_menu.sync(menu, func(key: String) -> Color: return DECK_COLORS.get(key, Color(0.8, 0.2, 0.2)))
 		if menu.get("setup") is Dictionary:
@@ -2201,7 +2201,7 @@ func _update_slider() -> void:
 ## SOLATRO from the menu table: played here in the client; the game stays in its main menu and only
 ## sends the card pictures. Its scene and state wait in _solatro_cache until Solatro is left.
 func _start_solatro() -> void:
-	_send({"cmd": "need_atlas", "names": ["cards_1", "centers", "Joker", "blind_chips"]})
+	_send({"cmd": "need_atlas", "names": "cards_1 centers Joker blind_chips"}) # (one string: commands are flat)
 	_solatro_cache = {"scene": _last_scene, "state": _state}
 	_new_run_open = false
 	_solatro.hands = [_left, _right]
@@ -3048,9 +3048,6 @@ func _toggle_wrist_menu() -> void:
 				_wrist.visible = false
 				_set_calibrating(true)},
 			{"col": 0, "label": func(): return "Recenter", "action": func(): _place_layout()},
-			{"col": 0, "label": func(): return "Measure Real Table", "action": func():
-				_wrist.visible = false
-				_start_table_measure()},
 			{"col": 0, "label": func(): return "Floor: %+d cm" % int(round(_floor_cm)), "action": func(): pass,
 				"minus": func():
 					_set_floor(_floor_cm - 5.0)
@@ -3141,10 +3138,7 @@ func _load_settings() -> void:
 		_hands_on = cfg.get_value("settings", "hands", true)
 		_ambience_on = cfg.get_value("settings", "casino_sounds", true)
 		_jimbo_on = cfg.get_value("settings", "jimbo", true)
-		var rt = cfg.get_value("settings", "real_table") if cfg.has_section_key("settings", "real_table") else null
-		if rt is Transform3D:
-			_real_table = rt
-			_real_table_set = true
+		# (a real table measured earlier is no longer applied: "Measure Real Table" left the VR menu)
 		_wheel_mode = str(cfg.get_value("settings", "wheel_mode", "Real"))
 		if not WHEEL_MODES.has(_wheel_mode):
 			_wheel_mode = "Real"
@@ -3369,7 +3363,7 @@ func _apply_rewards() -> void:
 	if _collection != null:
 		_collection.set_golden(_ach.reward("curator"), _ach.metal("curator"))
 	if _solatro != null:
-		_solatro.set_golden_bowl(_ach.reward("token_hoarder"), _ach.metal("token_hoarder"))
+		_solatro.set_golden_bowl(_ach.reward("token_hoarder") and _ach.metal("token_hoarder").a > 0.0, _ach.metal("token_hoarder"))
 	if _counter != null:
 		_counter.sale = _ach.reward("bargain")
 	_casino.set_reward_signs(_ach.reward("streamer"), _ach.reward("endless"))
@@ -4978,6 +4972,8 @@ func _build_table_fun() -> void:
 		cfg.save(LAYOUT_FILE))
 	_lever = RerollLever.new()
 	_joker_table.add_child(_lever)
+	if _vr:
+		_lever.hands = [_left, _right] # (the ball flashes when a hand reaches it)
 	_lever.pulled.connect(_on_lever_pulled)
 	_coin_slot = _make_coin_slot()
 	_joker_table.add_child(_coin_slot)
@@ -5294,6 +5290,17 @@ func _make_play_stand() -> Node3D:
 	score.position = Vector3(0, back_y + 0.14, back_z)
 	score.visible = false
 	stand.add_child(score)
+	# in its place at Solatro's game over: how far you got
+	var over := Label3D.new()
+	over.name = "GameOver"
+	over.font_size = 72
+	over.pixel_size = 0.00045
+	over.outline_size = 12
+	over.outline_modulate = Color(0.05, 0.03, 0.06)
+	over.modulate = Color(1.0, 0.35, 0.3)
+	over.position = Vector3(0, back_y + 0.14, back_z)
+	over.visible = false
+	stand.add_child(over)
 	for k in 2:
 		var box := Node3D.new()
 		box.name = "Chips" if k == 0 else "Mult"
@@ -5358,7 +5365,8 @@ func _update_stand_info(state: Dictionary) -> void:
 		rim_mat.emission_energy_multiplier = 0.4
 	var hand = r.get("hand")
 	var score := _play_stand.get_node("Score") as Node3D
-	score.visible = in_round and hand is Dictionary and str(hand.get("name", "")).strip_edges() != ""
+	var solatro := bool(state.get("solatro", false)) # (Solatro scores in points, not chips x mult)
+	score.visible = in_round and not solatro and hand is Dictionary and str(hand.get("name", "")).strip_edges() != ""
 	if score.visible:
 		for k in ["Chips", "Mult"]:
 			var box := score.get_node(k) as Node3D
@@ -5368,6 +5376,11 @@ func _update_stand_info(state: Dictionary) -> void:
 			flame.visible = f is Dictionary
 			if f is Dictionary:
 				Board.set_flame(flame, f, false, 0.0 if k == "Chips" else 0.5)
+	var over := _play_stand.get_node_or_null("GameOver") as Label3D
+	if over != null: # Solatro's game over, where chips x mult would be
+		over.visible = solatro and str(state.get("state_name", "")) == "GAME_OVER"
+		if over.visible:
+			over.text = "GAME OVER - You Reached Round %d" % int(r.get("round", 0))
 
 
 ## The board's top surface in the stand's coordinates: centred, y = its normal.

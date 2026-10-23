@@ -44,7 +44,12 @@ const HELP_NEXT_ID := -605
 const CHIP_ID := -610               # - index: owned token chips on the table
 const DECK_CARD := Vector2(0.045, 0.06) # a card in the deck view
 const HOLD_IN_HAND := Transform3D(Basis(), Vector3(0.0, -0.01, -0.03)) # a held chip, from the controller
-const BOWL_POS := Vector3(-0.42, 0.0, 0.0)   # where the bowl starts (it can be carried elsewhere)
+const BOWL_POS := Vector3(-0.42, 0.0, 0.0)   # where the token pedestal starts (it can be carried elsewhere)
+const PEDESTAL_R := 0.11                     # the stone pedestal: its six-sided plinth (corner radius) ...
+const PEDESTAL_TOP := 0.028                  # ... and the height of its top
+const SOCKET_R := 0.068                      # a socket for each token, round the edge
+const CENTRE_R := 0.036                      # the well in the middle: a token placed there is used
+const FITTING := Color(0.48, 0.38, 0.24)     # the sockets' and the rune ring's metal (dark bronze)
 const HELP_POS := Vector3(0.38, 0.0, -0.3)   # HOW TO PLAY ...
 const EXIT_POS := Vector3(0.55, 0.0, -0.3)   # ... and EXIT right of it (swapped for left-handers)
 
@@ -92,28 +97,19 @@ signal note_moved(xf: Transform3D)  # the HAND POINTS card was put somewhere els
 signal hoarded                      # every token bought in one game ("Token Hoarder")
 signal sfx(kind: String, cards: int) # "play" / "discard" with how many cards: main.gd plays the game's sounds
 var _bought_game := {}              # token key -> true: bought in this game (used ones too)
-var _bowl_mat: StandardMaterial3D
-var _bowl_light: OmniLight3D
+var _bowl_mat: StandardMaterial3D    # the pedestal's metal fittings (sockets, rune ring)
+var _rune_mat: StandardMaterial3D    # the runes round the well: they light up when a token is used
+var _rune_flash := 0.0
+var _pedestal_label: Label3D        # "USE A TOKEN: PLACE IT IN THE MIDDLE" ...
+var _hints_off := false             # ... and the tokens' names: gone once a token was used in this game
 
 
-## "Token Hoarder" reward: the bowl glows gold.
+## "Token Hoarder" reward: the pedestal's fittings in the chosen colour (a plain colour, no glow).
 func set_golden_bowl(on: bool, colour := Color(1.0, 0.75, 0.25)) -> void:
 	if _bowl_mat == null:
 		return
-	_bowl_mat.emission_enabled = on
-	_bowl_mat.emission = colour
-	_bowl_mat.albedo_color = colour if on else Color(0.85, 0.66, 0.3)
-	_bowl_mat.emission_energy_multiplier = 0.9
-	if on and _bowl_light == null:
-		_bowl_light = OmniLight3D.new()
-		_bowl_light.light_color = colour
-		_bowl_light.light_energy = 0.6
-		_bowl_light.omni_range = 0.3
-		_bowl_light.position.y = 0.06
-		_bowl.add_child(_bowl_light)
-	if _bowl_light != null:
-		_bowl_light.visible = on
-		_bowl_light.light_color = colour
+	_bowl_mat.albedo_color = colour if on else FITTING
+	_rune_mat.albedo_color = _bowl_mat.albedo_color
 var _note: Node3D
 var _held_note_offset := Transform3D()
 var clamp_board: Callable           # (Vector2) -> Vector2: a spot on the joker board (main.gd)
@@ -166,6 +162,7 @@ func start() -> void:
 	_owned.clear()
 	_bought_game.clear()
 	_bonus = 0
+	_show_token_hints(true) # (a new game: the pedestal's help and the tokens' names again)
 	_new_round()
 	show_rules(best == 0) # the first games start with the rules
 
@@ -398,6 +395,8 @@ func _use_token(key: String) -> void:
 			hint.emit("The Shield works by itself when a round fails")
 			return
 	_owned.erase(key)
+	_rune_flash = 1.0 # (the runes round the well light up for a moment)
+	_show_token_hints(false) # (you know how it works now: less text on the table)
 	hint.emit(_token(key)["name"] + " used")
 	_publish()
 
@@ -568,13 +567,11 @@ func _refresh_table() -> void:
 		if not _owned.has(key):
 			(_chips[key] as Node3D).queue_free()
 			_chips.erase(key)
-	var i := 0
-	for t in TOKENS:
+	for t in TOKENS: # each token in its own socket of the pedestal
 		if _owned.has(t["key"]):
 			if not _chips.has(t["key"]):
 				_chips[t["key"]] = _make_chip(t, TOKENS.find(t))
-			(_chips[t["key"]] as Node3D).set_meta("home", Vector3(-0.3 + i * 0.065, 0.0, 0.1))
-			i += 1
+			(_chips[t["key"]] as Node3D).set_meta("socket", TOKENS.find(t))
 
 
 static func _rank_name(round_reached: int) -> String:
@@ -818,7 +815,7 @@ func _rules_pages() -> Array:
 		["Step 4: The jokers", "A joker you draw waits in your hand as a WILDCARD. Select it together with your cards and it becomes whatever card makes your hand best.\n\nBut careful: if you draw the second joker while the first one still waits in your hand, BOTH are gone - joke's on you, DWEEB!"],
 		["Step 5: End of the round", "After your 3rd play the round ends.\n\nScore at least the target: the round is beaten, and every point ABOVE the target becomes a bonus point for the Bonus Shoppe.\n\nMiss the target: the game is over - unless you own a Shield."],
 		["Step 6: The Bonus Shoppe", "Between the rounds the tokens stand on the sales counter. Grab one and pull it towards you to buy it with your bonus points (each token only once):\n\n" + "\n".join(tokens) + "\n\nBonus points you don't spend are lost. Press NEXT ROUND when you are ready."],
-		["Step 7: Use your tokens", "Your tokens lie on the table as colourful chips. To use one during a round, grab it and drop it into the golden bowl - or point at it and pull the trigger.\n\nYou can carry the bowl to any place on the table you like.\n\nThe Shield works by itself: it saves you once when you miss a target."],
+		["Step 7: Use your tokens", "Your tokens sit in the sockets of the stone pedestal. To use one during a round, grab it and place it in the well in the middle - or point at it and pull the trigger.\n\nYou can carry the pedestal to any place on the table you like.\n\nThe Shield works by itself: it saves you once when you miss a target."],
 		["Game over", "When you miss a target without a Shield, the game ends. The board shows how far you came and your rank:\n\nRound 3: Cat Food\nRound 5: Little Dweeb\nRound 7: Official Dweeb\nRound 10: Ultra Mega Uber Giga-Dweeb\n\nYour best round is kept. PLAY AGAIN starts a new game. Good luck - and Safe Travels!"],
 	]
 
@@ -870,8 +867,8 @@ func try_grab(hand: Node3D) -> bool:
 		_held_hand = hand
 		_held_offset = HOLD_IN_HAND # into the hand (not where it was): it sits between the fingers
 		return true
-	# the bowl itself: carried to another spot on the board
-	if (_bowl.global_position + global_basis.y.normalized() * 0.02).distance_to(hand.global_position) < 0.08:
+	# the pedestal itself: carried to another spot on the board
+	if (_bowl.global_position + global_basis.y.normalized() * 0.02).distance_to(hand.global_position) < PEDESTAL_R:
 		_held = _bowl
 		_held_key = ""
 		_held_hand = hand
@@ -920,8 +917,8 @@ func release(hand: Node3D) -> void:
 	if was == _note:
 		note_moved.emit(_note.transform)
 		return
-	if Vector2(local.x - _bowl.position.x, local.z - _bowl.position.z).length() < 0.1 and local.y < 0.3:
-		_use_token(_held_key) # into the bowl: used
+	if Vector2(local.x - _bowl.position.x, local.z - _bowl.position.z).length() < CENTRE_R + 0.015 and local.y < 0.3:
+		_use_token(_held_key) # into the well in the middle: used (anywhere else: back to its socket)
 
 
 func _animate_chips(delta: float) -> void:
@@ -937,8 +934,11 @@ func _animate_chips(delta: float) -> void:
 			if is_instance_valid(_held_hand): # (glides into the hand in a moment, then stays there)
 				chip.global_transform = chip.global_transform.interpolate_with(_held_hand.global_transform * _held_offset, 1.0 - exp(-30.0 * delta))
 			continue
-		var home: Vector3 = chip.get_meta("home", chip.position)
+		var home: Vector3 = _bowl.transform * socket_pos(int(chip.get_meta("socket", 0)))
 		chip.transform = chip.transform.interpolate_with(Transform3D(Basis(), home), k)
+	if _rune_flash > 0.0:
+		_rune_flash = maxf(_rune_flash - delta * 1.6, 0.0)
+		_rune_mat.emission_energy_multiplier = 2.5 * _rune_flash
 
 
 func _make_chip(t: Dictionary, index: int) -> Node3D:
@@ -953,37 +953,124 @@ func _make_chip(t: Dictionary, index: int) -> Node3D:
 	l.outline_modulate = Color(0.05, 0.03, 0.06)
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.position.y = 0.075
+	l.name = "Name"
+	l.visible = not _hints_off
 	node.add_child(l)
 	GameFont.apply_to(node)
 	_body(node, CHIP_ID - index, Vector3(0.05, 0.07, 0.05), Vector3(0, 0.03, 0))
 	return node
 
 
+## Where token i sits on the pedestal (in the pedestal's space): round the edge, the first one at
+## the front, the others going round.
+static func socket_pos(i: int) -> Vector3:
+	var a := PI * 0.5 + TAU * i / TOKENS.size()
+	return Vector3(cos(a) * SOCKET_R, PEDESTAL_TOP + 0.001, sin(a) * SOCKET_R)
+
+
+## The token pedestal: a six-sided stone plinth with a socket for each token round its edge (a token
+## you buy sits there) and a dark well with a ring of runes in the middle - place a token there and
+## it is used. Matt stone and dark bronze, no glow (the runes only light up when a token is used).
 func _build_bowl() -> void:
 	var root := Node3D.new()
 	_bowl = root
 	root.position = BOWL_POS
 	add_child(root)
-	var mi := MeshInstance3D.new()
-	var bowl := CylinderMesh.new()
-	bowl.top_radius = 0.07
-	bowl.bottom_radius = 0.045
-	bowl.height = 0.03
-	mi.mesh = bowl
-	_bowl_mat = _mat(Color(0.85, 0.66, 0.3), 0.3, 0.8)
-	mi.material_override = _bowl_mat
-	mi.position.y = 0.015
-	root.add_child(mi)
+	var stone := _mat(Color(0.4, 0.39, 0.37), 0.95, 0.0)
+	var top_stone := _mat(Color(0.5, 0.49, 0.46), 0.9, 0.0)
+	var dark := _mat(Color(0.07, 0.065, 0.06), 1.0, 0.0)
+	_bowl_mat = _mat(FITTING, 0.6, 0.5)
+	_rune_mat = _mat(FITTING, 0.6, 0.5)
+	_rune_mat.emission_enabled = true
+	_rune_mat.emission = Color(0.55, 0.8, 1.0)
+	_rune_mat.emission_energy_multiplier = 0.0
+	_slab6(root, PEDESTAL_R, 0.022, 0.011, stone)                  # the plinth ...
+	_slab6(root, PEDESTAL_R - 0.012, 0.006, 0.025, top_stone)      # ... and its top
+	for i in TOKENS.size(): # the sockets: a dark recess in a metal ring
+		var p := socket_pos(i)
+		_disc(root, 0.017, Vector3(p.x, PEDESTAL_TOP + 0.0004, p.z), dark)
+		_ring(root, 0.0165, 0.021, Vector3(p.x, PEDESTAL_TOP + 0.0015, p.z), _bowl_mat)
+	# the well in the middle, with its ring of runes (short engraved strokes)
+	_disc(root, CENTRE_R - 0.006, Vector3(0, PEDESTAL_TOP + 0.0004, 0), dark)
+	_ring(root, CENTRE_R - 0.006, CENTRE_R, Vector3(0, PEDESTAL_TOP + 0.0015, 0), _rune_mat)
+	for k in 12:
+		var a := TAU * k / 12.0
+		var mark := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.0016, 0.0012, 0.008 if k % 3 == 0 else 0.005)
+		mark.mesh = bm
+		mark.material_override = _rune_mat
+		mark.position = Vector3(cos(a) * (CENTRE_R + 0.008), PEDESTAL_TOP + 0.0006, sin(a) * (CENTRE_R + 0.008))
+		mark.rotation.y = -a + (0.35 if k % 2 == 0 else -0.35)
+		root.add_child(mark)
 	var l := Label3D.new()
-	l.text = "USE A TOKEN:\nDROP IT HERE"
+	_pedestal_label = l
+	l.text = "USE A TOKEN:\nPLACE IT IN THE MIDDLE"
 	l.font_size = 26
 	l.pixel_size = 0.0006
 	l.outline_size = 6
 	l.outline_modulate = Color(0.05, 0.03, 0.06)
 	l.modulate = Color(1.0, 0.85, 0.4)
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	l.position.y = 0.08
+	l.position.y = 0.1
 	root.add_child(l)
+
+
+## The help over the pedestal and the names over the tokens: shown until the first token of a game
+## is used, then hidden (easier to read the table); a new game shows them again.
+func _show_token_hints(on: bool) -> void:
+	_hints_off = not on
+	if _pedestal_label != null:
+		_pedestal_label.visible = on
+	for key in _chips:
+		var name_label := (_chips[key] as Node3D).get_node_or_null("Name")
+		if name_label != null:
+			name_label.visible = on
+
+
+## A six-sided stone slab (radius to its corners), height h, centred at height y.
+func _slab6(parent: Node3D, r: float, h: float, y: float, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	var c := CylinderMesh.new()
+	c.top_radius = r
+	c.bottom_radius = r
+	c.height = h
+	c.radial_segments = 6
+	c.rings = 1
+	mi.mesh = c
+	mi.material_override = mat
+	mi.position.y = y
+	parent.add_child(mi)
+
+
+## A thin flat disc lying on the pedestal.
+func _disc(parent: Node3D, r: float, at: Vector3, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	var c := CylinderMesh.new()
+	c.top_radius = r
+	c.bottom_radius = r
+	c.height = 0.0008
+	c.radial_segments = 24
+	c.rings = 1
+	mi.mesh = c
+	mi.material_override = mat
+	mi.position = at
+	parent.add_child(mi)
+
+
+## A flat metal ring lying on the pedestal (inner and outer radius).
+func _ring(parent: Node3D, inner: float, outer: float, at: Vector3, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	var t := TorusMesh.new()
+	t.inner_radius = inner
+	t.outer_radius = outer
+	t.rings = 28
+	t.ring_segments = 6
+	mi.mesh = t
+	mi.material_override = mat
+	mi.position = at
+	mi.scale = Vector3(1.0, 0.4, 1.0) # (flat)
+	parent.add_child(mi)
 
 
 func _build_sign(text: String, id: int, at: Vector3, colour: Color, board_colour := Color(0.05, 0.03, 0.06)) -> Node3D:
