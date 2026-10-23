@@ -10,7 +10,7 @@ Play [Balatro](https://www.playbalatro.com/) in virtual reality. Balatro keeps r
 
 You need your own copy of Balatro: the client takes all card art, sounds and the font from your installed game while it runs – **no game files from Balatro are included here.** Fan project, not affiliated with LocalThunk or Playstack.
 
-> **Beta:** this is a pre-release for beta testers.
+> **Beta 0.96:** this is a pre-release for beta testers.
 
 ## Install
 
