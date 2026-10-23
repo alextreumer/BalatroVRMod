@@ -21,7 +21,7 @@ You need Balatro (Steam, Windows) and a VR headset (e.g. Meta Quest with Virtual
 
 The zip contains `INSTALL.md` with every step in detail and help if something does not work.
 
-## Build it yourself
+## Or build it yourself
 
 - `client/` – the Godot 4.7 VR client (see `client/README.md` for all controls and features)
 - `BalatroMod/` – the Balatro mod (Lovely + Steamodded)
