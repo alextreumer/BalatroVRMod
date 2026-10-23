@@ -988,6 +988,7 @@ func _update_jokers(state: Dictionary) -> void:
 					own.visible = str(j.get("value", "")) == ""
 			_set_price_sticker(inst, int(j.get("sell", 0)))
 			_set_sticker_badges(inst, j.get("stickers", []))
+			_set_compat_sticker(inst, "" if str(j.get("facing", "front")) == "back" else str(j.get("compat", "")))
 			_set_face_down(inst, str(j.get("facing", "front")) == "back", state)
 			_set_pinned(inst, bool(j.get("pinned", false)))
 	for uid in _jokers.keys():
@@ -1807,6 +1808,69 @@ func _set_sticker_badges(inst: Node3D, stickers: Array) -> void:
 	if row.get_child_count() == 0:
 		row.free()
 		inst.set_meta("badge_key", "") # try again once the atlases are there
+
+
+## Blueprint / Brainstorm: a round sticker on the front of the pedestal - a green tick when the
+## joker they copy is "compatible", a red X when it is "incompatible" (like the game's own label).
+func _set_compat_sticker(inst: Node3D, compat: String) -> void:
+	if inst.get_meta("compat", "") == compat:
+		return
+	inst.set_meta("compat", compat)
+	var old := inst.get_node_or_null("CompatSticker")
+	if old != null:
+		old.free()
+	if compat != "compatible" and compat != "incompatible":
+		return
+	var ok := compat == "compatible"
+	var sticker := Node3D.new()
+	sticker.name = "CompatSticker"
+	sticker.position = Vector3(0.036, 0.016, 0.03) # front right, leaning against the pedestal
+	sticker.rotation_degrees = Vector3(-20.0, 40.0, 0.0)
+	inst.add_child(sticker)
+	var paper := MeshInstance3D.new()
+	var disc := CylinderMesh.new()
+	disc.top_radius = 0.013
+	disc.bottom_radius = 0.013
+	disc.height = 0.0012
+	paper.mesh = disc
+	paper.rotation_degrees.x = 90.0 # its face looks forward (+z)
+	var pm := StandardMaterial3D.new()
+	pm.albedo_color = Color(0.97, 0.96, 0.93) # a white rim around the coloured middle
+	pm.roughness = 0.8
+	paper.material_override = pm
+	paper.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sticker.add_child(paper)
+	var fill := MeshInstance3D.new()
+	var inner := CylinderMesh.new()
+	inner.top_radius = 0.011
+	inner.bottom_radius = 0.011
+	inner.height = 0.0014
+	fill.mesh = inner
+	fill.rotation_degrees.x = 90.0
+	var fm := StandardMaterial3D.new()
+	fm.albedo_color = Color(0.3, 0.75, 0.35) if ok else Color(0.9, 0.24, 0.2) # the game's green / red
+	fm.emission_enabled = true
+	fm.emission = fm.albedo_color * 0.25
+	fm.roughness = 0.6
+	fill.material_override = fm
+	fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sticker.add_child(fill)
+	# the symbol: two white bars on the sticker (a tick, or a cross)
+	var wm := StandardMaterial3D.new()
+	wm.albedo_color = Color(1.0, 1.0, 1.0)
+	wm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var bars: Array = [[Vector2(-0.0035, -0.001), 0.007, -45.0], [Vector2(0.002, 0.0015), 0.013, 50.0]] if ok \
+			else [[Vector2.ZERO, 0.014, 45.0], [Vector2.ZERO, 0.014, -45.0]]
+	for bar in bars:
+		var stroke := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(bar[1], 0.0026, 0.0006)
+		stroke.mesh = bm
+		stroke.material_override = wm
+		stroke.position = Vector3(bar[0].x, bar[0].y, 0.001)
+		stroke.rotation_degrees.z = bar[2]
+		stroke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		sticker.add_child(stroke)
 
 
 func _set_price_sticker(inst: Node3D, price: int) -> void:

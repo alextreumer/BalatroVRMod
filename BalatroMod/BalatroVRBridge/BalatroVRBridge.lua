@@ -966,6 +966,12 @@ local function joker_state(card, slot)
         sell = num(card.sell_cost), -- the price sticker under the pedestal
         stickers = card_stickers(card), -- Eternal, Rental, ... shown as small badges on the 3D pedestal
     }
+    -- Blueprint / Brainstorm: the game works out every frame whether the joker they copy can be
+    -- copied ("compatible" / "incompatible"); VR shows it as a green tick or a red X sticker
+    local key = card.config.center.key
+    if key == "j_blueprint" or key == "j_brainstorm" then
+        j.compat = a.blueprint_compat or ""
+    end
     local n = a.name
     if n == "Castle" and cr.castle_card then
         j.target.suit = cr.castle_card.suit
