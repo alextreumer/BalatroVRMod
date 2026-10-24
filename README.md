@@ -8,6 +8,9 @@ Play [Balatro](https://www.playbalatro.com/) in virtual reality. Balatro keeps r
 - a score tower and chip mountains that grow with your run
 - the casino table as the main menu, Solatro – a solo card game on the table – and VR achievements
 
+
+Watch the Showcase Trailer here: https://youtu.be/jdWvll1mY_0
+
 You need your own copy of Balatro: the client takes all card art, sounds and the font from your installed game while it runs – **no game files from Balatro are included here.** Fan project, not affiliated with LocalThunk or Playstack.
 
 ## Install
