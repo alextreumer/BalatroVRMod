@@ -2,7 +2,7 @@
 
 Play [Balatro](https://www.playbalatro.com/) in virtual reality. Balatro keeps running on your PC as usual; a small mod (**BalatroVRBridge**) sends the whole game to a VR client built with Godot, which shows it around you in a virtual casino:
 
-- your cards in your hand – grab them, play them on the stand, throw them over your shoulder to discard
+- your cards in your hand – grab them, play them on the stake chip, throw them over your shoulder to discard
 - jokers as 3D models on the table, booster packs to tear open, a reroll machine with a lever
 - a shop counter where you grab what you buy, a real Wheel of Fortune, boss blinds that change the room
 - a score tower and chip mountains that grow with your run
