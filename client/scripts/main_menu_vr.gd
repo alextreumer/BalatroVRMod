@@ -15,7 +15,7 @@ const ACTIONS := ["play", "continue", "collection", "options", "youtube", "quit_
 const BASE_ID := -300              # target ids of the objects: BASE_ID - index in ACTIONS
 const TOUCH_RADIUS := 0.07         # a hand this close to the buzzer's top presses it
 const CARD := Vector2(0.071, 0.095)
-const VERSION := "1.0"       # shown at the front edge of the menu table
+const VERSION := "1.01"       # shown at the front edge of the menu table
 
 var hands: Array = []              # XRController3D: hands that can slap the buzzer
 

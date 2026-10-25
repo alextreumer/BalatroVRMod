@@ -24,8 +24,8 @@ const SUSAN_R := 0.34               # the plate's radius (a wide wooden rim outs
 const DECK_RING := 0.23             # the decks' distance from its middle
 const PLATE_TOP := 0.016            # the decks lie on it at this height
 const SPIN_GRAB_MIN := 0.285        # a hand this far (or further) from the middle - outside the gold ring - turns the plate
-const SPIN_FRICTION := 1.6          # how fast a flicked turntable slows down
-const SNAP_SPEED := 0.7             # slower than this (rad/s): it eases to the nearest deck in front
+const SPIN_FRICTION := 0.6          # how fast a flicked turntable slows down (low: it spins on a good while)
+const SNAP_SPEED := 0.35           # slower than this (rad/s): it eases to the nearest deck in front
 const GRAB_RADIUS := 0.08
 const DROP_RADIUS := 0.13           # let go this close to the mat (sideways) = put on it
 const STACK_H := 0.02

@@ -52,6 +52,7 @@ var _mood_flash := 0.0
 var _mood_time := 0.0
 var _tension := false               # the last hand: neon dimmed
 var calm := false                   # Calm Lights: no flashes or flicker, see set_calm()
+var _table_spot: SpotLight3D        # the pendant lamp over the table (casts the shadows)
 const CALM_DIM := 0.45              # how dim the room always is with Calm Lights
 var _tension_amount := 0.0
 var _room_spots: Array[SpotLight3D] = [] # ceiling spots over the machines (dimmed in the last hand)
@@ -170,6 +171,17 @@ func set_calm(on: bool) -> void:
 		_machines.calm = on
 	if _boss_room != null:
 		_boss_room.apply(_boss_room._key, on) # (bubbles, waves, racing machines off or on)
+
+
+## Performance mode (slower PCs): the ceiling spots over the machines and the side room lights go
+## out (the neon and the table lamp stay), and the table lamp casts no shadows.
+func set_performance(on: bool) -> void:
+	for s in _room_spots:
+		s.visible = not on
+	for d in _dimmed_lights:
+		(d["light"] as Light3D).visible = not on
+	if _table_spot != null:
+		_table_spot.shadow_enabled = not on
 
 
 ## The run is won: every slot machine hits the jackpot, bells and coins all around.
@@ -800,6 +812,7 @@ func _build_card_table() -> void:
 	spot.position = Vector3(lamp_x, 1.4, -0.1)
 	spot.rotation_degrees.x = -90.0
 	_table.add_child(spot)
+	_table_spot = spot
 
 
 func _chip_stack(parent: Node3D, pos: Vector3, count: int, colour: Color) -> void:

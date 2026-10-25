@@ -73,7 +73,11 @@ const TOWER_AFTER_STATES := ["NEW_ROUND", "ROUND_EVAL", "GAME_OVER"] # the score
 const SOLATRO_PASS := ["vr_flags", "need_atlas", "slider", "menu"] # still for the game while Solatro runs
 const ROUND_STATES := ["SELECTING_HAND", "HAND_PLAYED", "DRAW_TO_HAND"] # chip only while a blind is being played
 const CHIP_HIT_RADIUS := 0.13                   # how close the hand must be to "lay cards on it"
+const FLICK_SPEED := 0.7                        # m/s: grabbed cards let go this fast towards the table are played
+const FLICK_AIM := 0.25                         # ... roughly towards the blind chip (cos of ~75 degrees) or forward, away from you
+const FLICK_WINDOW := 0.25                      # s: how far back the flick may lie when the grip opens
 const LAYOUT_FILE := "user://vr_layout.cfg"
+const PERF_RENDER_SCALE := 0.8   # performance mode: pixels per eye (each side) compared to the headset's own
 const LAYOUT_VERSION := 3                       # v2: pile + slots on the joker board, v3: board reshaped (0.5 x 0.6)
 const CALIB_GRAB_RADIUS := 0.15
 
@@ -217,6 +221,8 @@ var _pointer_valid := false
 
 var _grab_active := false
 var _grabbed: Array = []
+var _bundle_prev := Vector3.ZERO     # the grabbing hand last frame (for the flick towards the table)
+var _bundle_flicks: Array = []       # [time, velocity] of the grabbing hand over the last moment
 
 # Calibration: the player moves/rotates/resizes these and the result is saved
 var _calib_items := {}        # name -> Node3D
@@ -2836,6 +2842,8 @@ func _try_grab() -> void:
 		return
 	_grab_active = true
 	_grabbed = selected
+	_bundle_prev = _point.global_position
+	_bundle_flicks.clear()
 	# the grabbed cards now belong to the grabbing hand: they follow its position AND rotation
 	for id in _grabbed:
 		if _hand_cards.has(id):
@@ -2844,7 +2852,15 @@ func _try_grab() -> void:
 
 ## Grabbed cards glide into a small fan between the fingers of the grabbing hand.
 func _update_bundle() -> void:
-	var k := 1.0 - exp(-14.0 * get_process_delta_time())
+	var delta := get_process_delta_time()
+	var k := 1.0 - exp(-14.0 * delta)
+	# the hand's speed over the last moment: a flick towards the table plays the cards (see _is_flick)
+	var now := Time.get_ticks_msec() / 1000.0
+	var hand_pos := _point.global_position
+	_bundle_flicks.append([now, (hand_pos - _bundle_prev) / maxf(delta, 0.001)])
+	_bundle_prev = hand_pos
+	while not _bundle_flicks.is_empty() and now - float(_bundle_flicks[0][0]) > FLICK_WINDOW:
+		_bundle_flicks.pop_front()
 	var fan_plane := Basis(Vector3.RIGHT, deg_to_rad(FAN_TILT))
 	var n := _grabbed.size()
 	for i in n:
@@ -2874,6 +2890,8 @@ func _release_bundle() -> void:
 	var by_box := false
 	if _chip.visible and pos.distance_to(_chip.global_position) < CHIP_HIT_RADIUS:
 		sent = "play"
+	elif _chip.visible and _is_flick(pos):
+		sent = "play" # tossed onto the table with a little flick of the wrist
 	elif _is_behind_shoulder(pos):
 		sent = "discard"
 	elif _coin_slot.is_visible_in_tree() and pos.distance_to(_coin_slot.global_position) < SLOT_RADIUS:
@@ -2908,13 +2926,42 @@ func _release_bundle() -> void:
 	# (to the table or the discard pile) – not back through the card hand first. If the game
 	# doesn't take them (e.g. a hand the boss forbids), they return to the hand after a moment.
 	var now := Time.get_ticks_msec() / 1000.0
-	for id in _grabbed:
+	var toss := sent == "play" and _play_stand.is_visible_in_tree()
+	var n := _grabbed.size()
+	for i in n:
+		var id: int = _grabbed[i]
 		if _hand_cards.has(id) and is_instance_valid(_hand_cards[id]):
 			_hand_cards[id].reparent(self, true)
 			_released[id] = now
+			if toss: # played: they drop onto the stand right away (see _glide_released), not hang in the air
+				var on_board := Vector3((i - (n - 1) / 2.0) * PLAY_SPACING, 0.004, 0.0)
+				_hand_cards[id].set_meta("toss", _play_stand.global_transform * _play_surface()
+						* Transform3D(Basis(Vector3.RIGHT, deg_to_rad(-90.0)), on_board))
 	_grab_active = false
 	_grabbed = []
 	_rebuild_hand(_hand_items)
+
+
+## Let go during a quick little throw towards the table (the blind chip in the middle of it): the
+## fastest moment of the last FLICK_WINDOW seconds counts, as the hand already slows down when the
+## grip opens. A loose toss counts: roughly at the chip, or simply forward and not upwards. Towards
+## you (or over the shoulder) it doesn't count.
+func _is_flick(pos: Vector3) -> bool:
+	var to_table := _chip.global_position - pos
+	if to_table.length() < 0.01:
+		return false
+	to_table = to_table.normalized()
+	var forward := -_head.global_basis.z
+	forward.y = 0.0
+	forward = forward.normalized()
+	for sample in _bundle_flicks:
+		var v: Vector3 = sample[1]
+		if v.length() < FLICK_SPEED:
+			continue
+		var dir := v.normalized()
+		if dir.dot(to_table) > FLICK_AIM or (dir.dot(forward) > 0.5 and dir.y < 0.3):
+			return true
+	return false
 
 
 func _is_behind_shoulder(pos: Vector3) -> bool:
@@ -3198,6 +3245,7 @@ func _toggle_wrist_menu() -> void:
 			{"col": 0, "label": func(): return "Background: " + ["Green", "Dark", "Casino"][_backdrop], "action": func(): _next_backdrop()},
 			{"col": 0, "label": func(): return "Calm Lights: " + ("On" if _calm else "Off"), "action": func(): _set_calm(not _calm)},
 			{"col": 0, "label": func(): return "Casino Sounds: " + ("On" if _ambience_on else "Off"), "action": func(): _set_ambience(not _ambience_on)},
+			{"col": 0, "label": func(): return "Performance: " + ("On" if _perf else "Off"), "action": func(): _set_perf(not _perf)},
 			# right: the game (its Run Info and Options in their colours from the game), help, extras
 			{"col": 1, "colour": Color(0.996, 0.373, 0.333), "label": func(): return "Run Info", "action": func(): # (the run panel's buttons: not shown in VR)
 				_wrist.visible = false
@@ -3281,6 +3329,7 @@ func _load_settings() -> void:
 		if not WHEEL_MODES.has(_wheel_mode):
 			_wheel_mode = "Real"
 		_standing = cfg.get_value("settings", "standing", false)
+		_perf = cfg.get_value("settings", "performance", false)
 		if _spectator != null:
 			var spec = cfg.get_value("settings", "spectator", "Off")
 			if spec is int: # saved as a number before there were five views: 0 off, 1 eyes, 2 shoulder, 3 room
@@ -3288,6 +3337,7 @@ func _load_settings() -> void:
 			_spectator.set_mode(maxi(Spectator.NAMES.find(str(spec)), 0))
 	_casino.ambience.set_active(_backdrop == Backdrop.ROOM and _ambience_on)
 	_casino.set_calm(_calm)
+	_apply_perf()
 	for g in _gloves:
 		g.visible = _hands_on
 	_load_floor()
@@ -3341,7 +3391,7 @@ func _show_tutorial() -> void:
 	var recenter := "B" if _left_handed else "Y"
 	var pages := [
 		["Hi, my name is Alex and welcome to UnderTheVRadar's Balatro in VR mod!", "Once a round starts, your cards are in your %s hand. Point at them with your %s hand and pull the trigger to select them - just like clicking. Press the thumbstick of your %s hand to sort them by rank or by suit - or turn that hand on its side and point at SORT." % [cards, point, cards]],
-		["Play & discard", "Grab the selected cards with your %s grip and let go over the golden blind chip to play them (or press %s). Throw them over your shoulder to discard (or press %s)." % [point, play, discard]],
+		["Play & discard", "Grab the selected cards with your %s grip and let go over the golden blind chip - or toss them towards the table with a little flick - to play them (or press %s). Throw them over your shoulder to discard (or press %s)." % [point, play, discard]],
 		["Your table", "Jokers stand on the board: touch one to read it, grab it to move it - left to right is their order. Drop one into the SELL / DISCARD box to sell it - the box lights up when letting go would sell. Cards you grabbed from your hand and let go over the box are discarded. Lift it and look underneath for its price. In the shop, take what you want off the sales counter and pull it towards you to buy it; pull the slot machine's lever to reroll."],
 		["Packs & cards", "Booster packs float up to you: grab them with both hands and tear them open (or point and pull the trigger). Tarot and planet cards stand in the card stand - point at one and pull the trigger to use it."],
 		["The deck", "Hold your hand over the 3D deck on the table: it shows which cards are still left in it. Take your hand away and the view closes again."],
@@ -4559,7 +4609,7 @@ func _set_backdrop(mode: Backdrop) -> void:
 	if _vr and not _hand_items.is_empty():
 		_rebuild_hand(_hand_items)
 	_board.hide_dimmers = see_through
-	_env.glow_enabled = not flat # bloom halos would tint the chroma-key green
+	_env.glow_enabled = not flat and not _perf # bloom halos would tint the chroma-key green (performance mode: no bloom)
 	# the casino: smoky air that swallows the far corners, filmic colours with a bit more contrast
 	# (passthrough and green stay neutral)
 	_env.fog_enabled = mode == Backdrop.ROOM
@@ -4632,11 +4682,50 @@ func _set_room_reverb(on: bool) -> void:
 
 func _start_xr() -> bool:
 	_xr = XRServer.find_interface("OpenXR")
-	if _xr == null or not _xr.initialize():
+	if _xr == null:
+		return false
+	# Performance mode renders fewer pixels per eye. The headset's image size can only be set before
+	# OpenXR starts, so a change in the VR menu takes effect with the next start.
+	var cfg := ConfigFile.new()
+	_perf = cfg.load(LAYOUT_FILE) == OK and cfg.get_value("settings", "performance", false)
+	if _xr is OpenXRInterface:
+		(_xr as OpenXRInterface).render_target_size_multiplier = PERF_RENDER_SCALE if _perf else 1.0
+	if not _xr.initialize():
 		return false
 	get_viewport().use_xr = true
-	get_viewport().msaa_3d = Viewport.MSAA_4X # smooth edges: jaggies and shimmering are far more visible in a headset
+	# OpenXR paces the frames itself; with V-Sync the desktop window would also wait for the monitor
+	# and could drag the headset down to a fraction of its refresh rate.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	get_viewport().msaa_3d = _perf_msaa() # smooth edges: jaggies and shimmering are far more visible in a headset
 	return true
+
+
+## MSAA for the headset and the spectator window: 4x, or 2x in performance mode.
+func _perf_msaa() -> Viewport.MSAA:
+	return Viewport.MSAA_2X if _perf else Viewport.MSAA_4X
+
+
+## "Performance" in the VR menu: for slower PCs. 2x instead of 4x MSAA, no bloom, no shadows, the
+## room's side lamps off, and (from the next start) fewer pixels per eye. Kept in the settings.
+func _set_perf(on: bool) -> void:
+	_perf = on
+	_apply_perf()
+	var cfg := ConfigFile.new()
+	cfg.load(LAYOUT_FILE)
+	cfg.set_value("settings", "performance", on)
+	cfg.save(LAYOUT_FILE)
+	_set_status("Performance mode on (sharpness changes with the next start)" if on else "Performance mode off (sharpness changes with the next start)")
+
+
+func _apply_perf() -> void:
+	if _vr:
+		get_viewport().msaa_3d = _perf_msaa()
+	_env.glow_enabled = _backdrop == Backdrop.ROOM and not _perf
+	_casino.set_performance(_perf)
+	if _end_spot != null:
+		_end_spot.shadow_enabled = not _perf
+	if _spectator != null:
+		_spectator.set_msaa(_perf_msaa())
 
 
 func _build_scene() -> void:
@@ -6670,6 +6759,7 @@ var _released := {}              # hand card id -> time it was let go to be play
 var _flights: Array = []         # cards flying somewhere, see _fly()
 var _tension := false
 var _calm := false               # Calm Lights: no flashes, flicker or pulsing (photosensitive players)
+var _perf := false               # Performance mode for slower PCs, see _set_perf()
 var _hands_on := true            # Jimbo's gloves shown
 var _jimbo_on := true            # "VR: Jimbo": he sits at the casino table
 var _ambience_on := true         # the casino's own sounds (slot machines, glasses, chips)
@@ -6733,6 +6823,7 @@ var _number := RegEx.create_from_string("[0-9]+(\\.[0-9]+)?")
 
 
 func _animate_game_feel(delta: float) -> void:
+	_glide_released(delta)
 	_return_refused_cards()
 	# The Ox (takes your money for your most played hand): the coin pile trembles nervously
 	_coins.tremble = _boss_key == "bl_ox" and not _calm
@@ -6766,6 +6857,16 @@ func _animate_game_feel(delta: float) -> void:
 
 # ---------------------------------------------------------------- the deck, the hand, the discard pile
 
+## Cards let go to be played glide straight onto the play stand while the game is still taking them
+## (it answers a moment later); from there they slide into their places on the stand.
+func _glide_released(delta: float) -> void:
+	var k := 1.0 - exp(-12.0 * delta)
+	for id in _released.keys():
+		var card = _hand_cards.get(id)
+		if card is Node3D and is_instance_valid(card) and card.has_meta("toss"):
+			card.global_transform = card.global_transform.interpolate_with(card.get_meta("toss") as Transform3D, k)
+
+
 ## Cards let go to be played / discarded that are still in the hand after a while: the game
 ## didn't take them – back into the card hand.
 func _return_refused_cards() -> void:
@@ -6778,6 +6879,7 @@ func _return_refused_cards() -> void:
 			continue
 		_released.erase(id)
 		if _hand_cards.has(id) and is_instance_valid(_hand_cards[id]) and _fan_anchor != null:
+			_hand_cards[id].remove_meta("toss")
 			_hand_cards[id].reparent(_fan_anchor, true)
 			back = true
 	if back:
@@ -7332,7 +7434,7 @@ func _run_end_scene(won: bool) -> void:
 			_end_spot.light_color = Color(1.0, 0.92, 0.8)
 			_end_spot.spot_angle = 14.0
 			_end_spot.spot_range = 3.5
-			_end_spot.shadow_enabled = true
+			_end_spot.shadow_enabled = not _perf # (performance mode: no shadow)
 			add_child(_end_spot)
 		_end_spot.light_energy = 0.0
 

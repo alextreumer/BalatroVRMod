@@ -38,6 +38,7 @@ var _badge_pop := 0.0
 var _rig: Node3D                   # the film camera model
 var _tally: MeshInstance3D         # its red light
 var _black: ColorRect              # covers the window while the view is "Off"
+var _msaa := Viewport.MSAA_4X      # 2x in performance mode, see set_msaa()
 
 
 func _ready() -> void:
@@ -63,6 +64,13 @@ func next_mode() -> void:
 	set_mode((mode + 1) % NAMES.size()) # Off -> Eyes -> Tripod -> Shoulder -> Overhead -> Room -> Off
 
 
+## Edge smoothing of the window (the main script lowers it in performance mode).
+func set_msaa(m: Viewport.MSAA) -> void:
+	_msaa = m
+	if _win != null:
+		_win.msaa_3d = m
+
+
 func _open_window() -> void:
 	_win = Window.new()
 	_win.visible = false # force_native can only be set while the window is hidden (shown below)
@@ -77,7 +85,9 @@ func _open_window() -> void:
 	add_child(_win)
 	_win.popup_centered() # now it opens as its own window on the desktop
 	_win.world_3d = get_viewport().world_3d # the same world as the headset sees
-	_win.msaa_3d = Viewport.MSAA_4X # smooth edges in the recording too
+	_win.msaa_3d = _msaa # smooth edges in the recording too
+	# no V-Sync: the headset sets the pace, waiting for the monitor here would slow it down
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED, _win.get_window_id())
 	_cam = Camera3D.new()
 	_cam.fov = 70.0
 	_cam.near = 0.03

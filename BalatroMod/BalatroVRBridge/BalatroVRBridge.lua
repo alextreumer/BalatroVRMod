@@ -2,7 +2,7 @@
 --- MOD_NAME: Balatro in VR
 --- MOD_ID: BalatroVRBridge
 --- MOD_AUTHOR: [UnderTheVRadar]
---- VERSION: 1.0
+--- VERSION: 1.01
 --- MOD_DESCRIPTION: Play Balatro in VR: the whole game around you in a virtual casino, with your cards in your hand and 3D jokers on the table. Needs the "Balatro in VR" client - youtube.com/@UnderTheVRadar
 
 ----------------------------------------------
